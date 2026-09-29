@@ -33,6 +33,7 @@ function createPaymentServer() {
           network: BASE_SEPOLIA_NETWORK,
           payTo: resolvePayTo,
           price: { asset: BASE_SEPOLIA_USDC, amount: ARTICLE_PRICE_UNITS },
+          extra: { name: 'USDC', version: '2' },
         },
         description: `有料記事: ${title}`,
         mimeType: 'application/json',

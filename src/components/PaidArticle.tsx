@@ -22,40 +22,57 @@ export function PaidArticle({ article }: { article: Article }) {
   const [isPaying, setIsPaying] = useState(false)
 
   async function unlockArticle() {
+    // 前回の試行で表示したエラーを消す。
     setError('')
+    // 署名に必要なウォレット情報がなければ、接続を促して処理を中断する。
     if (!address || !walletClient) {
       setError('先にページ上部からウォレットを接続してください。')
       return
     }
+    // EIP-712署名のチェーンと決済先ネットワークをBase Sepoliaに揃える。
     if (chainId !== baseSepolia.id) {
       setError('署名する前にBase Sepoliaへ切り替えてください。')
       return
     }
 
+    // ボタンを処理中表示にして、連続操作を防ぐ。
     setIsPaying(true)
     try {
+      // wagmiのウォレットクライアントをx402が使う署名者形式に変換する。
       const signer = toClientEvmSigner({
         address,
+        // x402から受け取ったEIP-712データをウォレットに渡し、署名結果を返す。
         signTypedData: (typedData) => walletClient.signTypedData({
           ...typedData,
           account: address,
         } as never),
       })
+      // Base Sepoliaのexact決済方式に、このウォレット署名者を登録する。
       const client = new x402Client().register(
         BASE_SEPOLIA_NETWORK,
+        // ExactEvmSchemeは、EVM系ネットワーク向けのx402「定額決済方式」を実装するクラス
+        // ExactEvmSchemeは支払い要求を受け取ると、EIP-3009の署名に必要なデータを組み立て、渡されたsigner.signTypedDataを呼び出します
         new ExactEvmScheme(signer),
       )
+      // 402応答を受けた際にx402が署名と支払い付き再送を行うfetchを作る。
       const fetchWithPayment = wrapFetchWithPayment(fetch, client)
+      // 記事APIを呼び出す。payToはこのウォレット自身に指定する。
       const response = await fetchWithPayment(
         `/api/article/${article.slug}?payTo=${encodeURIComponent(address)}`,
       )
+      // API応答をJSONとして読み取る。
       const result = await response.json()
+      // HTTPエラーならAPIが返した内容を表示用の例外にする。
       if (!response.ok) throw new Error(result.error || '決済に失敗しました。')
+      // 成功応答に取引ハッシュがなければ、決済完了として扱わない。
       if (!result.transaction) throw new Error('決済応答に取引ハッシュがありません。')
+      // 決済済みの記事本文と取引情報を画面に反映する。
       setContent(result as PaidContent)
     } catch (cause) {
+      // 署名拒否や通信・決済エラーを画面に表示する。
       setError(cause instanceof Error ? cause.message : '決済に失敗しました。もう一度お試しください。')
     } finally {
+      // 成功・失敗のどちらでも処理中表示を解除する。
       setIsPaying(false)
     }
   }

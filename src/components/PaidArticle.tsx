@@ -14,9 +14,13 @@ type PaidContent = {
 }
 
 export function PaidArticle({ article }: { article: Article }) {
+  // 接続中のウォレットの情報を取得
   const { address, chainId, isConnected } = useAccount()
+  // walletClientを初期化してウォレットに接続
   const { data: walletClient } = useWalletClient()
+  // 接続中ウォレットのネットワーク切り替え機能の初期化
   const { switchChain, isPending: isSwitching } = useSwitchChain()
+
   const [content, setContent] = useState<PaidContent | null>(null)
   const [error, setError] = useState('')
   const [isPaying, setIsPaying] = useState(false)
@@ -54,10 +58,12 @@ export function PaidArticle({ article }: { article: Article }) {
         // ExactEvmSchemeは支払い要求を受け取ると、EIP-3009の署名に必要なデータを組み立て、渡されたsigner.signTypedDataを呼び出します
         new ExactEvmScheme(signer),
       )
+      // APIコールをx402でラップする。
       // 402応答を受けた際にx402が署名と支払い付き再送を行うfetchを作る。
       const fetchWithPayment = wrapFetchWithPayment(fetch, client)
-      // 記事APIを呼び出す。payToはこのウォレット自身に指定する。
+      // 記事APIを呼び出す。内部にユーザの署名待ちと、署名後のコールバック処理が含まれる。
       const response = await fetchWithPayment(
+        // payToはこのウォレット自身に指定する。
         `/api/article/${article.slug}?payTo=${encodeURIComponent(address)}`,
       )
       // API応答をJSONとして読み取る。

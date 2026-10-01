@@ -14,6 +14,8 @@ npm run dev
 
 `http://localhost:3000` を開きます。`.env` の `X402_PAY_TO` が空なら自己送金モード、Base Sepoliaの受取アドレスを設定すると固定受取モードになります。受取アドレスは公開情報です。
 
+スマホの通常ブラウザーからMetaMaskアプリへ接続するには、[WalletConnect Dashboard](https://dashboard.walletconnect.com/)でProject IDを取得し、`.env`の`VITE_WALLETCONNECT_PROJECT_ID`に設定してから開発サーバーを再起動してください。接続メニューの「スマホのMetaMask（WalletConnect）」を選ぶと、WalletConnect経由でMetaMaskアプリに接続できます。Project IDはブラウザーに公開される識別子で、秘密鍵ではありません。
+
 ## 実送金の確認
 
 1. MetaMaskまたはCoinbase Walletを接続します。ウォレットUIはブラウザのハイドレーション後に表示されます。

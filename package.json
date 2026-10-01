@@ -3,18 +3,19 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
+    "dev": "vite --host 0.0.0.0",
     "build": "vite build && tsc --noEmit",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@tanstack/react-query": "^5.95.0",
     "@tanstack/react-router": "^1.170.40",
     "@tanstack/react-start": "^1.168.59",
+    "@wagmi/connectors": "^8.2.0",
+    "@walletconnect/ethereum-provider": "^2.25.0",
     "@x402/core": "^2.27.0",
     "@x402/evm": "^2.27.0",
     "@x402/fetch": "^2.27.0",
-    "@wagmi/connectors": "^8.2.0",
-    "@tanstack/react-query": "^5.95.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "viem": "^2.57.0",

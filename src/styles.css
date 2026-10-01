@@ -40,6 +40,7 @@ button { font: inherit; }
 .connector-menu button:hover { background: #f5f5ef; }
 .connector-mark { font-size: 18px; }
 .connector-error { margin: 8px; color: #a53f31; font-size: 11px; }
+.connector-hint { margin: 8px; color: #777b67; font-size: 10px; line-height: 1.5; }
 
 .hero { min-height: 427px; border-bottom: 1px solid var(--line); position: relative; padding: 57px 0 40px; }
 .hero-kicker, .section-heading, .article-meta, .card-footer, .featured-byline, .price-tag, .hero-note, .site-footer > span, .manifesto > span:first-child, .story-topline, .story-author, .preview-label, .payment-details, .unlocked-label, .receipt, .next-story > span, .story-visual-top, .story-visual-bottom, .featured-art-caption, .art-caption { font-family: var(--mono); }

@@ -53,10 +53,19 @@ export function WalletControls() {
               onClick={() => connect({ connector }, { onSuccess: () => setShowConnectors(false) })}
               disabled={isPending}
             >
-              <span className="connector-mark">{connector.name.includes('Coinbase') ? '◈' : '⬡'}</span>
-              {connector.name.includes('Coinbase') ? 'Coinbase Wallet' : 'MetaMask / ブラウザウォレット'}
+              <span className="connector-mark">
+                {connector.id === 'walletConnect' ? '⌁' : connector.name.includes('Coinbase') ? '◈' : '⬡'}
+              </span>
+              {connector.id === 'walletConnect'
+                ? 'スマホのMetaMask（WalletConnect）'
+                : connector.name.includes('Coinbase')
+                  ? 'Coinbase Wallet'
+                  : 'MetaMask / ブラウザウォレット'}
             </button>
           ))}
+          {!connectors.some((connector) => connector.id === 'walletConnect') && (
+            <p className="connector-hint">スマホのMetaMask接続には、`.env`へのWalletConnect Project ID設定が必要です。</p>
+          )}
           {error && <p className="connector-error">接続できませんでした。ウォレットを確認してください。</p>}
         </div>
       )}

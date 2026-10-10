@@ -4,10 +4,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
+    "mcp": "tsx agent-mcp/src/index.ts",
+    "typecheck:mcp": "tsc --noEmit -p agent-mcp/tsconfig.json",
     "build": "vite build && tsc --noEmit",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@tanstack/react-query": "^5.95.0",
     "@tanstack/react-router": "^1.170.40",
     "@tanstack/react-start": "^1.168.59",
@@ -19,13 +22,15 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "viem": "^2.57.0",
-    "wagmi": "^3.7.7"
+    "wagmi": "^3.7.7",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^6.0.1",
+    "tsx": "^4.23.15",
     "typescript": "^5.9.3",
     "vite": "^8.0.14"
   }

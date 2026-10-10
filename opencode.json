@@ -1,0 +1,14 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "signaljournal": {
+      "type": "local",
+      "command": ["node", "--import", "tsx", "agent-mcp/src/index.ts"],
+      "cwd": ".",
+      "enabled": true
+    }
+  },
+  "permission": {
+    "signaljournal_purchase_article": "ask"
+  }
+}

@@ -142,6 +142,22 @@ button { font: inherit; }
 .spinner { width: 11px; height: 11px; display: inline-block; border: 1px solid #ffffff70; border-top-color: white; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .paywall-backlink { display: block; width: fit-content; margin: 0 auto; padding: 17px 0 20px; color: #77776d; font-size: 10px; }
+
+.agent-approval { min-height: 62vh; padding: 56px 20px 72px; background: var(--paper); }
+.agent-approval-card { width: min(100%, 590px); margin: 0 auto; padding: 36px; border: 1px solid var(--line); background: #fffefa; }
+.agent-approval-card h1 { margin: 8px 0 12px; font-family: var(--serif); font-size: clamp(25px, 5vw, 36px); font-weight: 500; }
+.agent-approval-intro, .agent-approval-note { color: #77776d; font-family: var(--serif); font-size: 14px; line-height: 1.9; }
+.agent-payment-terms { margin: 24px 0; border-top: 1px solid var(--line); }
+.agent-payment-terms > div { display: grid; grid-template-columns: 105px minmax(0, 1fr); gap: 14px; padding: 13px 0; border-bottom: 1px solid var(--line); }
+.agent-payment-terms dt { color: #85857c; font-family: var(--mono); font-size: 10px; }
+.agent-payment-terms dd { margin: 0; overflow-wrap: anywhere; font-size: 13px; }
+.agent-payment-terms code { font-size: 10px; }
+.agent-approval-note { padding: 13px 15px; background: #f3f1e9; font-size: 12px; }
+.agent-approval-hint { color: #85857c; font-size: 12px; text-align: center; }
+.agent-approval-primary { width: 100%; margin-top: 15px; }
+.agent-approval-cancel { display: block; margin: 13px auto 0; padding: 8px 12px; border: 0; background: transparent; color: #77776d; font-size: 11px; cursor: pointer; }
+.agent-approval-cancel:disabled { cursor: not-allowed; opacity: .5; }
+.agent-approval-card .payment-details { flex-wrap: wrap; }
 .unlocked-article { max-width: 650px; margin: 0 auto; padding: 27px 0 16px; }
 .unlocked-heading { display: flex; justify-content: space-between; align-items: center; padding: 0 0 13px; border-bottom: 1px solid var(--line); }
 .unlocked-label { display: flex; align-items: center; gap: 8px; color: #657151; font-size: 8px; letter-spacing: .1em; }
@@ -223,6 +239,9 @@ button { font: inherit; }
   .free-preview p { font-size: 12px; }
   .paywall-content { padding: 20px 12px; }
   .payment-details { gap: 9px; font-size: 6px; }
+  .agent-approval { padding: 28px 14px 45px; }
+  .agent-approval-card { padding: 24px 18px; }
+  .agent-payment-terms > div { grid-template-columns: 83px minmax(0, 1fr); gap: 9px; }
   .unlocked-heading { align-items: flex-start; flex-direction: column; gap: 11px; }
   .article-body p { font-size: 12px; line-height: 2.25; }
   .receipt { gap: 7px; }

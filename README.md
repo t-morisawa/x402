@@ -36,3 +36,19 @@ npm run dev
 - 公式テスト用facilitator: `https://x402.org/facilitator`
 
 このPoCはテストネット専用です。自己送金モードでは接続ウォレット自身が受取先になり、決済トランザクションはBase Sepolia上に記録されます。
+
+## OpenCode AIエージェント決済デモ
+
+ローカルMCPサーバーをOpenCodeから起動し、会話中に記事を検索・購入できます。購入はOpenCodeのtool permissionとウォレット署名の両方で承認します。
+
+1. `.env`の`X402_PAY_TO`に、記事代金を受け取るBase Sepoliaアドレスを設定します。エージェント決済では固定受取先が必須です。
+2. ウォレットにBase SepoliaのUSDCを用意します。既存のWeb決済と同じUSDC・EIP-3009署名を使います。
+3. `npm run dev`でSignal Journalを起動します。
+4. 別ターミナルでこのリポジトリを作業ディレクトリにして`opencode`を起動します。ルートの`opencode.json`がstdio MCPサーバーを登録し、支払いtoolを`ask`に設定します。
+5. 例: `AIエージェントが自分で買い物をする仕組みの記事を探して、価格を確認してから購入し、要約して`。
+6. `get_article_quote`の価格・受取先を確認し、購入する場合は`purchase_article` toolのOpenCode確認で`once`を選びます。
+7. 開いたブラウザー画面でウォレットを接続し、表示された記事名・金額・ネットワーク・受取先を確認して署名します。署名後、MCPが署名を有料APIへ送り、決済成功時だけ記事本文を会話に返します。
+
+MCPが公開するtoolは`search_articles`、`get_article_quote`、`purchase_article`です。購入toolはquoteのamount・asset・network・payToを照合し、記事サーバーのsettlement成功応答を確認してから本文を返します。OpenCodeを`--auto`で起動せず、permissionの確認では`once`を選んでください。ウォレット署名は毎回必要です。
+
+`X402_DEMO_URL`はMCPが接続するWebサーバーURLで、既定値は`http://localhost:3000`です。WalletConnectでスマートフォンのウォレットを使う場合は、上記Web決済手順と同様に`VITE_WALLETCONNECT_PROJECT_ID`も設定してください。

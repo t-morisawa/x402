@@ -10,12 +10,18 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AgentApproveRouteImport } from './routes/agent/approve'
 import { Route as ArticleSlugRouteImport } from './routes/article/$slug'
 import { Route as ApiArticleSlugRouteImport } from './routes/api/article/$slug'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AgentApproveRoute = AgentApproveRouteImport.update({
+  id: '/agent/approve',
+  path: '/agent/approve',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ArticleSlugRoute = ArticleSlugRouteImport.update({
@@ -31,30 +37,39 @@ const ApiArticleSlugRoute = ApiArticleSlugRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/agent/approve': typeof AgentApproveRoute
   '/article/$slug': typeof ArticleSlugRoute
   '/api/article/$slug': typeof ApiArticleSlugRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/agent/approve': typeof AgentApproveRoute
   '/article/$slug': typeof ArticleSlugRoute
   '/api/article/$slug': typeof ApiArticleSlugRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/agent/approve': typeof AgentApproveRoute
   '/article/$slug': typeof ArticleSlugRoute
   '/api/article/$slug': typeof ApiArticleSlugRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/article/$slug' | '/api/article/$slug'
+  fullPaths: '/' | '/agent/approve' | '/article/$slug' | '/api/article/$slug'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/article/$slug' | '/api/article/$slug'
-  id: '__root__' | '/' | '/article/$slug' | '/api/article/$slug'
+  to: '/' | '/agent/approve' | '/article/$slug' | '/api/article/$slug'
+  id:
+    | '__root__'
+    | '/'
+    | '/agent/approve'
+    | '/article/$slug'
+    | '/api/article/$slug'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AgentApproveRoute: typeof AgentApproveRoute
   ArticleSlugRoute: typeof ArticleSlugRoute
   ApiArticleSlugRoute: typeof ApiArticleSlugRoute
 }
@@ -66,6 +81,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/agent/approve': {
+      id: '/agent/approve'
+      path: '/agent/approve'
+      fullPath: '/agent/approve'
+      preLoaderRoute: typeof AgentApproveRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/article/$slug': {
@@ -87,6 +109,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AgentApproveRoute: AgentApproveRoute,
   ArticleSlugRoute: ArticleSlugRoute,
   ApiArticleSlugRoute: ApiArticleSlugRoute,
 }

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
@@ -6,13 +7,14 @@ import { x402Client, x402HTTPClient } from '@x402/core/client'
 import { decodePaymentSignatureHeader } from '@x402/core/http'
 import type { PaymentPayload, PaymentRequired, PaymentRequirements } from '@x402/core/types'
 import { z } from 'zod'
-import { articles, findArticle } from '../../src/data/articles.ts'
 import { ARTICLE_PRICE_UNITS, BASE_SEPOLIA_NETWORK, BASE_SEPOLIA_USDC } from '../../src/lib/payment-config.ts'
 import { isPaymentPayload, requestWalletApproval } from './approval-bridge.ts'
 
 const DEFAULT_DEMO_URL = 'http://localhost:3000'
 const QUOTE_TTL_MS = 2 * 60 * 1000
-const MAX_PRICE_UNITS = BigInt(ARTICLE_PRICE_UNITS)
+const REQUEST_TIMEOUT_MS = 15_000
+const MAX_RESPONSE_BYTES = 1_000_000
+const MAX_PRICE_UNITS = 100_000n // 0.10 USDC (6 decimals)
 const USDC_DECIMALS = 6
 const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/
 
@@ -22,8 +24,9 @@ if (existsSync(resolve(process.cwd(), '.env'))) {
 
 type Quote = {
   quoteId: string
-  slug: string
-  requirements: PaymentRequirements
+  url: string
+  requirement: PaymentRequirements
+  description: string
   expiresAt: number
 }
 
@@ -38,187 +41,303 @@ function getDemoUrl() {
   return url
 }
 
-function getConfiguredPayTo() {
-  const payTo = process.env.X402_PAY_TO?.trim()
-  if (!payTo || !ADDRESS_PATTERN.test(payTo)) {
-    throw new Error('Set a valid fixed X402_PAY_TO address in .env before using agent payments')
+function getAllowedOrigins() {
+  const configuredOrigins = process.env.X402_ALLOWED_ORIGINS
+    ?.split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+  const origins = configuredOrigins?.length ? configuredOrigins : [getDemoUrl().origin]
+
+  return new Set(origins.map((origin) => {
+    const parsed = new URL(origin)
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) {
+      throw new Error(`Invalid X402_ALLOWED_ORIGINS entry: ${origin}`)
+    }
+    if (parsed.pathname !== '/' || parsed.search || parsed.hash) {
+      throw new Error(`X402_ALLOWED_ORIGINS entries must be origins, not URLs with paths: ${origin}`)
+    }
+    return parsed.origin
+  }))
+}
+
+function validateResourceUrl(rawUrl: string) {
+  const url = new URL(rawUrl)
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
+    throw new Error('URL must use HTTP(S) and must not contain credentials')
   }
-  return payTo
+  url.hash = ''
+  if (!getAllowedOrigins().has(url.origin)) {
+    throw new Error(`Resource origin is not allowed: ${url.origin}`)
+  }
+  return url
 }
 
 function formatUsdc(amount: string) {
   const value = BigInt(amount)
-  const whole = value / 10n ** BigInt(USDC_DECIMALS)
-  const fraction = (value % 10n ** BigInt(USDC_DECIMALS)).toString().padStart(USDC_DECIMALS, '0').replace(/0+$/, '')
-  return fraction ? `${whole}.${fraction}` : whole.toString()
+  const unit = 10n ** BigInt(USDC_DECIMALS)
+  const fraction = (value % unit).toString().padStart(USDC_DECIMALS, '0').replace(/0+$/, '')
+  return fraction ? `${value / unit}.${fraction}` : (value / unit).toString()
 }
 
-function findAllowedRequirement(required: PaymentRequired, expectedPayTo: string) {
-  const accepted = required.accepts.find((requirement) =>
-    requirement.scheme === 'exact' &&
-    requirement.network === BASE_SEPOLIA_NETWORK &&
-    requirement.asset.toLowerCase() === BASE_SEPOLIA_USDC.toLowerCase() &&
-    requirement.amount === ARTICLE_PRICE_UNITS &&
-    BigInt(requirement.amount) <= MAX_PRICE_UNITS &&
-    requirement.payTo.toLowerCase() === expectedPayTo.toLowerCase(),
-  )
+async function readLimitedBody(response: Response) {
+  if (!response.body) return ''
 
-  if (!accepted) {
-    throw new Error('The article server returned payment terms outside the configured Base Sepolia USDC demo policy')
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > MAX_RESPONSE_BYTES) {
+        await reader.cancel()
+        throw new Error(`HTTP response exceeded the ${MAX_RESPONSE_BYTES}-byte limit`)
+      }
+      chunks.push(value)
+    }
+  } finally {
+    reader.releaseLock()
   }
-  return accepted
+
+  const bytes = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return new TextDecoder().decode(bytes)
 }
 
-async function fetchPaymentRequired(slug: string) {
-  const demoUrl = getDemoUrl()
-  const articleUrl = new URL(`/api/article/${encodeURIComponent(slug)}`, demoUrl)
-  const response = await fetch(articleUrl, { headers: { Accept: 'application/json' } })
+function parseJsonBody(text: string): unknown {
+  if (!text) return undefined
+  try {
+    return JSON.parse(text)
+  } catch {
+    return undefined
+  }
+}
+
+function parseResourceBody(text: string, contentType: string): unknown {
+  if (contentType.includes('application/json') || contentType.includes('+json')) {
+    try {
+      return JSON.parse(text)
+    } catch {
+      throw new Error('Resource declared JSON but returned invalid JSON')
+    }
+  }
+  if (contentType.startsWith('text/plain')) return text
+  throw new Error(`Unsupported resource content type: ${contentType || '(missing)'}`)
+}
+
+async function requestResource(url: string) {
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: { Accept: 'application/json, text/plain' },
+    redirect: 'manual',
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  })
+  if (response.status >= 300 && response.status < 400) {
+    await response.body?.cancel()
+    throw new Error('Redirects are not allowed for x402 resources')
+  }
+  const text = await readLimitedBody(response)
+  return { response, text, json: parseJsonBody(text) }
+}
+
+function parsePaymentRequired(response: Response, body: unknown): PaymentRequired {
+  return x402HttpClient.getPaymentRequiredResponse((name) => response.headers.get(name), body)
+}
+
+function selectAllowedRequirement(required: PaymentRequired) {
+  const candidates = required.accepts
+    .filter((requirement) => {
+      if (
+        requirement.scheme !== 'exact' ||
+        requirement.network !== BASE_SEPOLIA_NETWORK ||
+        requirement.asset.toLowerCase() !== BASE_SEPOLIA_USDC.toLowerCase() ||
+        !ADDRESS_PATTERN.test(requirement.payTo)
+      ) return false
+      try {
+        const amount = BigInt(requirement.amount)
+        return amount > 0n && amount <= MAX_PRICE_UNITS
+      } catch {
+        return false
+      }
+    })
+    .sort((a, b) => Number(BigInt(a.amount) - BigInt(b.amount)))
+
+  if (candidates.length === 0) {
+    throw new Error('402 response has no payment option allowed by the Base Sepolia USDC policy (maximum 0.10 USDC)')
+  }
+  return candidates[0]
+}
+
+async function getChallenge(url: string) {
+  const { response, json } = await requestResource(url)
   if (response.status !== 402) {
-    const body = await response.json().catch(() => ({})) as { error?: string }
-    throw new Error(body.error || `Expected x402 HTTP 402 challenge; received ${response.status}`)
+    throw new Error(`Expected an x402 HTTP 402 challenge; received ${response.status}`)
   }
-  const body = await response.clone().json().catch(() => ({}))
-  const required = x402HttpClient.getPaymentRequiredResponse((name) => response.headers.get(name), body)
-  return { required, articleUrl }
+  const required = parsePaymentRequired(response, json)
+  return { required, requirement: selectAllowedRequirement(required) }
 }
 
-function getQuote(quoteId: string, slug: string) {
+function sameRequirement(a: PaymentRequirements, b: PaymentRequirements) {
+  return a.scheme === b.scheme &&
+    a.network === b.network &&
+    a.amount === b.amount &&
+    a.asset.toLowerCase() === b.asset.toLowerCase() &&
+    a.payTo.toLowerCase() === b.payTo.toLowerCase() &&
+    a.maxTimeoutSeconds === b.maxTimeoutSeconds &&
+    JSON.stringify(a.extra) === JSON.stringify(b.extra)
+}
+
+function getQuote(quoteId: string, url: string) {
   const quote = quotes.get(quoteId)
-  if (!quote || quote.slug !== slug || quote.expiresAt <= Date.now()) {
+  if (!quote || quote.url !== url || quote.expiresAt <= Date.now()) {
     quotes.delete(quoteId)
-    throw new Error('Quote not found or expired. Get a new quote before purchasing.')
+    throw new Error('Quote not found or expired. Inspect the URL again before purchasing.')
   }
   return quote
 }
 
-function toolResult(value: unknown, isError = false) {
+function result(value: unknown, isError = false) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }], isError }
 }
 
-const server = new McpServer({ name: 'signaljournal', version: '1.0.0' })
+function paymentRequiredForApproval(required: PaymentRequired, requirement: PaymentRequirements, url: string): PaymentRequired {
+  return {
+    ...required,
+    accepts: [requirement],
+  }
+}
+
+function challengeMatchesQuote(
+  challenge: { required: PaymentRequired; requirement: PaymentRequirements },
+  quote: Quote,
+) {
+  return sameRequirement(challenge.requirement, quote.requirement) &&
+    challenge.required.resource.url === quote.url &&
+    (challenge.required.resource.description || quote.url) === quote.description
+}
+
+const server = new McpServer({ name: 'x402http', version: '1.0.0' })
 
 server.registerTool(
-  'search_articles',
+  'inspect_url',
   {
-    title: 'Search Signal Journal articles',
-    description: 'Search free article titles and summaries. This tool never returns paid article bodies and never makes a payment.',
-    inputSchema: { query: z.string().trim().min(1).max(120) },
-    annotations: { readOnlyHint: true, openWorldHint: false },
-  },
-  async ({ query }) => {
-    const terms = query.toLocaleLowerCase('ja')
-      .split(/[\s、。,.!?！？「」『』はをがにでとからのへや]/u)
-      .filter((term) => term.length >= 2 && !['記事', '探して', '価格', '確認', '購入', '要約', 'する', 'して'].includes(term))
-    const matches = articles
-      .map((article) => {
-        const searchable = `${article.title}\n${article.lead}\n${article.category}`.toLocaleLowerCase('ja')
-        return { article, score: terms.filter((term) => searchable.includes(term)).length }
-      })
-      .filter(({ score }) => terms.length === 0 || score > 0)
-      .sort((a, b) => b.score - a.score)
-      .map(({ article }) => article)
-    return toolResult(matches.map(({ slug, title, lead, author, date }) => ({
-      slug,
-      title,
-      lead,
-      author,
-      date,
-      indicativePrice: `${formatUsdc(ARTICLE_PRICE_UNITS)} USDC`,
-      network: BASE_SEPOLIA_NETWORK,
-    })))
-  },
-)
-
-server.registerTool(
-  'get_article_quote',
-  {
-    title: 'Get article payment quote',
-    description: 'Fetch an x402 payment quote for a Signal Journal article without signing or making a payment.',
-    inputSchema: { slug: z.string().min(1).max(100) },
+    title: 'Inspect an x402 HTTP resource',
+    description: 'Make a free unsigned GET to an allowed URL. If it returns x402 HTTP 402, report its payment terms without signing or paying.',
+    inputSchema: { url: z.string().url().max(2048) },
     annotations: { readOnlyHint: true, openWorldHint: true },
   },
-  async ({ slug }) => {
+  async ({ url: rawUrl }) => {
     try {
-      const article = findArticle(slug)
-      if (!article) throw new Error('Article not found')
-      const payTo = getConfiguredPayTo()
-      const { required } = await fetchPaymentRequired(slug)
-      const requirements = findAllowedRequirement(required, payTo)
-      const quoteId = crypto.randomUUID()
-      const expiresAt = Date.now() + QUOTE_TTL_MS
-      quotes.set(quoteId, { quoteId, slug, requirements, expiresAt })
+      const url = validateResourceUrl(rawUrl).toString()
+      const { response, text, json } = await requestResource(url)
 
+      if (response.status !== 402) {
+        if (!response.ok) throw new Error(`Resource request failed with HTTP ${response.status}`)
+        const contentType = response.headers.get('content-type') || ''
+        return result({
+          url,
+          status: response.status,
+          paid: false,
+          contentType,
+          body: parseResourceBody(text, contentType),
+        })
+      }
+
+      const required = parsePaymentRequired(response, json)
+      const requirement = selectAllowedRequirement(required)
+      const quoteId = randomUUID()
+      const expiresAt = Date.now() + QUOTE_TTL_MS
+      const description = required.resource?.description || url
+      quotes.set(quoteId, { quoteId, url, requirement, description, expiresAt })
       for (const [id, quote] of quotes) {
         if (quote.expiresAt <= Date.now()) quotes.delete(id)
       }
 
-      return toolResult({
+      return result({
         quoteId,
-        slug,
-        title: article.title,
-        amount: `${formatUsdc(requirements.amount)} USDC`,
-        asset: requirements.asset,
-        network: requirements.network,
-        payTo: requirements.payTo,
+        url,
+        description,
+        amount: `${formatUsdc(requirement.amount)} USDC`,
+        asset: requirement.asset,
+        network: requirement.network,
+        payTo: requirement.payTo,
         expiresAt: new Date(expiresAt).toISOString(),
-        nextStep: 'Show the terms to the user. Call purchase_article only after the user explicitly asks to proceed.',
+        note: 'These terms came from the URL\'s x402 402 response. No payment has been made.',
       })
     } catch (error) {
-      return toolResult({ error: error instanceof Error ? error.message : 'Could not get payment quote' }, true)
+      return result({ error: error instanceof Error ? error.message : 'Could not inspect URL' }, true)
     }
   },
 )
 
 server.registerTool(
-  'purchase_article',
+  'fetch_url',
   {
-    title: 'Purchase and read paid article',
-    description: 'After showing the quote and receiving the user’s request to proceed, open a local wallet approval page, collect an EIP-712 payment signature, and retrieve the article. OpenCode must ask the user before this tool executes.',
+    title: 'Pay for and fetch an x402 HTTP resource',
+    description: 'After showing the inspected quote and receiving the user’s request to proceed, ask OpenCode for approval, then open a wallet confirmation page. Fetches only the quoted URL after settlement succeeds.',
     inputSchema: {
       quoteId: z.string().uuid(),
-      slug: z.string().min(1).max(100),
+      url: z.string().url().max(2048),
       confirmedAmount: z.string().min(1).max(40),
       confirmedNetwork: z.string().min(1).max(40),
+      confirmedAsset: z.string().regex(ADDRESS_PATTERN),
       confirmedPayTo: z.string().regex(ADDRESS_PATTERN),
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   },
-  async ({ quoteId, slug, confirmedAmount, confirmedNetwork, confirmedPayTo }) => {
-    try {
-      const quote = getQuote(quoteId, slug)
-      const article = findArticle(slug)
-      if (!article) throw new Error('Article not found')
+  async ({ quoteId, url: rawUrl, confirmedAmount, confirmedNetwork, confirmedAsset, confirmedPayTo }) => {
+    let callbackCompleted = false
 
-      const expectedAmount = `${formatUsdc(quote.requirements.amount)} USDC`
+    try {
+      const url = validateResourceUrl(rawUrl).toString()
+      const quote = getQuote(quoteId, url)
+      const expectedAmount = `${formatUsdc(quote.requirement.amount)} USDC`
       if (
         confirmedAmount !== expectedAmount ||
-        confirmedNetwork !== quote.requirements.network ||
-        confirmedPayTo.toLowerCase() !== quote.requirements.payTo.toLowerCase()
+        confirmedNetwork !== quote.requirement.network ||
+        confirmedAsset.toLowerCase() !== quote.requirement.asset.toLowerCase() ||
+        confirmedPayTo.toLowerCase() !== quote.requirement.payTo.toLowerCase()
       ) {
-        throw new Error('Confirmed payment terms do not match the quote. Get and review a fresh quote.')
+        throw new Error('Confirmed terms do not match the quote. Inspect the URL again and review the current terms.')
+      }
+
+      const beforeApproval = await getChallenge(url)
+      if (!challengeMatchesQuote(beforeApproval, quote)) {
+        throw new Error('The resource details or payment terms changed since inspection. No signature was requested; inspect it again.')
       }
 
       const demoUrl = getDemoUrl()
-      const uiUrl = new URL('/agent/approve', demoUrl)
-      uiUrl.searchParams.set('slug', slug)
-      uiUrl.searchParams.set('title', article.title)
-      uiUrl.searchParams.set('amount', quote.requirements.amount)
-      uiUrl.searchParams.set('asset', quote.requirements.asset)
-      uiUrl.searchParams.set('network', quote.requirements.network)
-      uiUrl.searchParams.set('payTo', quote.requirements.payTo)
+      const approvalUrl = new URL('/agent/approve', demoUrl)
+      const paymentRequired = paymentRequiredForApproval(beforeApproval.required, beforeApproval.requirement, url)
+      const encodedChallenge = Buffer.from(JSON.stringify(paymentRequired)).toString('base64url')
+      if (encodedChallenge.length > 6000) throw new Error('The resource payment challenge is too large to display safely')
+
+      approvalUrl.searchParams.set('url', url)
+      approvalUrl.searchParams.set('description', quote.description)
+      approvalUrl.searchParams.set('amount', quote.requirement.amount)
+      approvalUrl.searchParams.set('asset', quote.requirement.asset)
+      approvalUrl.searchParams.set('network', quote.requirement.network)
+      approvalUrl.searchParams.set('payTo', quote.requirement.payTo)
+      approvalUrl.searchParams.set('paymentRequired', encodedChallenge)
 
       const approval = await requestWalletApproval({
-        approvalPageUrl: uiUrl.toString(),
+        approvalPageUrl: approvalUrl.toString(),
         uiOrigin: demoUrl.origin,
         quoteId,
       })
+      callbackCompleted = true
       quotes.delete(quoteId)
 
       if (approval.status !== 'approved') {
-        throw new Error('Wallet payment signature was rejected. No payment was sent.')
+        throw new Error('Wallet signature was rejected. No payment was sent.')
       }
       if (quote.expiresAt <= Date.now()) {
-        throw new Error('Quote expired while waiting for wallet approval. Get a fresh quote; the signed payload was not sent.')
+        throw new Error('Quote expired while waiting for wallet approval. The signed payload was not sent.')
       }
 
       let paymentPayload: PaymentPayload
@@ -230,65 +349,80 @@ server.registerTool(
       if (!isPaymentPayload(paymentPayload)) throw new Error('Invalid x402 payment payload')
       assertPayloadMatchesQuote(paymentPayload, quote)
 
-      const demoArticleUrl = new URL(`/api/article/${encodeURIComponent(slug)}`, demoUrl)
-      const response = await fetch(demoArticleUrl, {
-        headers: {
-          Accept: 'application/json',
-          'PAYMENT-SIGNATURE': approval.paymentHeader,
-        },
-      })
-      const body = await response.json().catch(() => ({})) as Record<string, unknown>
-      if (!response.ok) {
-        const errorMessage = typeof body.error === 'string' ? body.error : `Paid article request failed with HTTP ${response.status}`
-        throw new Error(errorMessage)
+      const immediatelyBeforePayment = await getChallenge(url)
+      if (!challengeMatchesQuote(immediatelyBeforePayment, quote)) {
+        throw new Error('The resource details or payment terms changed after signing. The signed payload was not sent.')
       }
 
+      const { response, text, json } = await requestResourceWithPayment(url, approval.paymentHeader)
+      if (!response.ok) {
+        const serverMessage = json && typeof json === 'object' && 'error' in json && typeof json.error === 'string'
+          ? json.error
+          : `Paid resource request failed with HTTP ${response.status}`
+        throw new Error(serverMessage)
+      }
+
+      const contentType = response.headers.get('content-type') || ''
+      const body = parseResourceBody(text, contentType)
       const settlement = x402HttpClient.getPaymentSettleResponse((name) => response.headers.get(name))
-      const transaction = typeof body.transaction === 'string' ? body.transaction : settlement.transaction
       if (
         !settlement.success ||
-        settlement.network !== quote.requirements.network ||
-        (settlement.amount !== undefined && settlement.amount !== quote.requirements.amount) ||
-        !transaction || transaction !== settlement.transaction ||
-        body.slug !== slug ||
-        (typeof body.network === 'string' && body.network !== quote.requirements.network) ||
-        (typeof body.amount === 'string' && body.amount !== quote.requirements.amount) ||
-        !Array.isArray(body.body) ||
-        !body.body.every((paragraph) => typeof paragraph === 'string')
+        settlement.network !== quote.requirement.network ||
+        (settlement.amount !== undefined && settlement.amount !== quote.requirement.amount) ||
+        !settlement.transaction
       ) {
-        throw new Error('Payment response did not contain a settled transaction and article body')
+        throw new Error('The x402 response did not confirm a successful settlement')
       }
 
-      return toolResult({
-        slug,
-        title: article.title,
-        body: body.body,
-        amount: `${formatUsdc(quote.requirements.amount)} USDC`,
-        network: quote.requirements.network,
-        payer: body.payer ?? settlement.payer,
-        transaction,
-        explorerUrl: `https://sepolia.basescan.org/tx/${transaction}`,
+      return result({
+        url,
+        description: quote.description,
+        contentType,
+        body,
+        payment: {
+          amount: `${formatUsdc(quote.requirement.amount)} USDC`,
+          network: settlement.network,
+          payer: settlement.payer,
+          transaction: settlement.transaction,
+          explorerUrl: `https://sepolia.basescan.org/tx/${settlement.transaction}`,
+        },
       })
     } catch (error) {
-      return toolResult({ error: error instanceof Error ? error.message : 'Article purchase failed' }, true)
+      if (!callbackCompleted) quotes.delete(quoteId)
+      return result({ error: error instanceof Error ? error.message : 'x402 resource fetch failed' }, true)
     }
   },
 )
 
+async function requestResourceWithPayment(url: string, paymentHeader: string) {
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      Accept: 'application/json, text/plain',
+      'PAYMENT-SIGNATURE': paymentHeader,
+    },
+    redirect: 'manual',
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  })
+  if (response.status >= 300 && response.status < 400) {
+    await response.body?.cancel()
+    throw new Error('Redirects are not allowed for x402 resources')
+  }
+  const text = await readLimitedBody(response)
+  return { response, text, json: parseJsonBody(text) }
+}
+
 function assertPayloadMatchesQuote(payload: PaymentPayload, quote: Quote) {
   const accepted = payload.accepted
-  const expected = quote.requirements
-  if (
-    accepted.scheme !== expected.scheme ||
-    accepted.network !== expected.network ||
-    accepted.amount !== expected.amount ||
-    accepted.asset.toLowerCase() !== expected.asset.toLowerCase() ||
-    accepted.payTo.toLowerCase() !== expected.payTo.toLowerCase()
-  ) {
-    throw new Error('Wallet signature does not match the approved quote')
+  const expected = quote.requirement
+  if (!sameRequirement(accepted, expected)) {
+    throw new Error('Wallet signature does not match the inspected quote')
+  }
+  if (payload.resource?.url && payload.resource.url !== quote.url) {
+    throw new Error('Wallet signature is bound to a different resource URL')
   }
 }
 
 const transport = new StdioServerTransport()
 await server.connect(transport)
-console.error('Signal Journal x402 MCP server connected over stdio')
+console.error('Generic x402 HTTP MCP connected over stdio')

@@ -1,7 +1,7 @@
 # OpenCode AIエージェント決済デモ 設計書
 
 更新日: 2026-10-10
-状態: 実装前の設計
+状態: 初期案（記事専用MCPデモの設計記録。現在の汎用HTTP x402デモは`docs/generic-x402-discovery-design.md`を参照）
 
 ## 1. 目的
 
@@ -160,19 +160,17 @@ MCPと承認画面の両方で、次の条件を許可リストと照合する�
 - OpenCodeの承認だけに依存せず、ウォレット側の署名操作も必須にする。OpenCodeの`--auto`はtool permissionのaskを省略し得るためデモ起動では使用しない。
 - 本設計は単一ユーザーのローカルデモを対象にする。複数ユーザー向けサービス化、利用上限管理、返金、恒久的な購入履歴、商用運用の鍵管理は対象外。
 
-## 10. 実装候補ファイル
+## 10. 後続の汎用設計への移行
 
 ```text
 src/routes/agent/approve.tsx           # ウォレット接続と決済確認UI
-src/lib/agent-approval.server.ts       # quote/callback関連のサーバー処理 (必要な場合)
-agent-mcp/src/index.ts                 # stdio MCPサーバーとtool定義
-agent-mcp/src/quotes.ts                # 402条件の抽出、quote期限・検証
-agent-mcp/src/approval-bridge.ts       # 一時localhost callbackとnonce検証
-agent-mcp/package.json                 # MCP SDK等の依存関係
-docs/agent-payment-design.md           # 本設計書
+x402-http-mcp/src/index.ts             # URL汎用のHTTP x402クライアントMCP
+x402-http-mcp/src/approval-bridge.ts   # 一時localhost callbackとnonce検証
+search-mcp/src/index.ts                # 検索モックMCP
+docs/generic-x402-discovery-design.md  # 現行の汎用x402設計
 ```
 
-実装前に確認すること: npm workspace化または独立packageのどちらにするか、現行TanStack Startからの`/agent/approve`追加方法、OpenCodeのMCPローカル設定とpermission設定の最新形式、MCP SDKのtool出力・キャンセル仕様。
+当初の記事専用の`search_articles` / `purchase_article`案から、現在は検索と汎用HTTP x402クライアントを別MCPにする構成へ移行している。詳細は`docs/generic-x402-discovery-design.md`を参照。
 
 ## 11. 受け入れ条件
 

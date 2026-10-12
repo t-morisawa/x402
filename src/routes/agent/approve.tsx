@@ -2,17 +2,19 @@ import { useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { ExactEvmScheme, toClientEvmSigner } from '@x402/evm'
 import { x402Client, x402HTTPClient } from '@x402/fetch'
+import type { PaymentRequired } from '@x402/core/types'
 import { baseSepolia } from 'wagmi/chains'
 import { useAccount, useSwitchChain, useWalletClient } from 'wagmi'
 import { BASE_SEPOLIA_NETWORK } from '../../lib/payment-config'
 
 type ApprovalSearch = {
-  slug: string
-  title: string
+  url: string
+  description: string
   amount: string | number
   asset: string
   network: string
   payTo: string
+  paymentRequired: string
   callbackUrl: string
   quoteId: string
   nonce: string
@@ -20,13 +22,28 @@ type ApprovalSearch = {
 
 type PageState = 'ready' | 'signing' | 'complete' | 'rejected'
 
+function formatUsdc(amount: string | number) {
+  const units = BigInt(String(amount))
+  const base = 1_000_000n
+  const fraction = (units % base).toString().padStart(6, '0').replace(/0+$/, '')
+  return fraction ? `${units / base}.${fraction}` : (units / base).toString()
+}
+
 export const Route = createFileRoute('/agent/approve')({
   validateSearch: (search: Record<string, unknown>) => search as unknown as ApprovalSearch,
   component: AgentApprovalPage,
 })
 
+function decodePaymentRequired(encoded: string): PaymentRequired {
+  const standardBase64 = encoded.replace(/-/g, '+').replace(/_/g, '/')
+  const padded = standardBase64.padEnd(Math.ceil(standardBase64.length / 4) * 4, '=')
+  const binary = atob(padded)
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0))
+  return JSON.parse(new TextDecoder().decode(bytes)) as PaymentRequired
+}
+
 function AgentApprovalPage() {
-  const { slug, title, amount, asset, network, payTo, callbackUrl, quoteId, nonce } = Route.useSearch()
+  const { url, description, amount, asset, network, payTo, paymentRequired: encodedPaymentRequired, callbackUrl, quoteId, nonce } = Route.useSearch()
   const { address, chainId, isConnected } = useAccount()
   const { data: walletClient } = useWalletClient()
   const { switchChain, isPending: isSwitching } = useSwitchChain()
@@ -34,16 +51,15 @@ function AgentApprovalPage() {
   const [error, setError] = useState('')
 
   function validateCallbackUrl() {
-    const url = new URL(callbackUrl)
-    if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || url.pathname !== `/callback/${nonce}`) {
-      throw new Error('ローカル決済コールバックが不正です。OpenCodeから操作をやり直してください。')
+    const callback = new URL(callbackUrl)
+    if (callback.protocol !== 'http:' || callback.hostname !== '127.0.0.1' || callback.pathname !== `/callback/${nonce}`) {
+      throw new Error('ローカル決済コールバックが不正です。OpenCodeからやり直してください。')
     }
-    return url.toString()
+    return callback.toString()
   }
 
   async function postCallback(body: Record<string, string>) {
-    const url = validateCallbackUrl()
-    const response = await fetch(url, {
+    const response = await fetch(validateCallbackUrl(), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ ...body, quoteId }),
@@ -83,34 +99,10 @@ function AgentApprovalPage() {
     setState('signing')
     let callbackSent = false
     try {
-      const signer = toClientEvmSigner({
-        address,
-        signTypedData: (typedData) => walletClient.signTypedData({
-          ...typedData,
-          account: address,
-        } as never),
-      })
-      const client = new x402Client().register(
-        BASE_SEPOLIA_NETWORK,
-        new ExactEvmScheme(signer),
-      )
-      const httpClient = new x402HTTPClient(client)
-
-      const resourceUrl = new URL(`/api/article/${encodeURIComponent(slug)}`, window.location.origin)
-      const challengeResponse = await fetch(resourceUrl, { headers: { Accept: 'application/json' } })
-      if (challengeResponse.status !== 402) {
-        const body = await challengeResponse.json().catch(() => ({})) as { error?: string }
-        throw new Error(body.error || `決済条件を取得できませんでした (HTTP ${challengeResponse.status})`)
-      }
-
-      const challengeBody = await challengeResponse.clone().json().catch(() => ({}))
-      const paymentRequired = httpClient.getPaymentRequiredResponse(
-        (name) => challengeResponse.headers.get(name),
-        challengeBody,
-      )
+      const parsedPaymentRequired = decodePaymentRequired(encodedPaymentRequired)
       const expectedAmount = String(amount)
       const expectedTerms = { scheme: 'exact', network, amount: expectedAmount, asset, payTo }
-      const terms = paymentRequired.accepts.find((requirement) =>
+      const terms = parsedPaymentRequired.accepts.find((requirement) =>
         requirement.scheme === 'exact' &&
         requirement.network === network &&
         requirement.amount === expectedAmount &&
@@ -118,7 +110,7 @@ function AgentApprovalPage() {
         requirement.payTo.toLowerCase() === payTo.toLowerCase(),
       )
       if (!terms) {
-        const actualTerms = paymentRequired.accepts.map(({ scheme, network: actualNetwork, amount: actualAmount, asset: actualAsset, payTo: actualPayTo }) => ({
+        const actualTerms = parsedPaymentRequired.accepts.map(({ scheme, network: actualNetwork, amount: actualAmount, asset: actualAsset, payTo: actualPayTo }) => ({
           scheme,
           network: actualNetwork,
           amount: actualAmount,
@@ -126,13 +118,22 @@ function AgentApprovalPage() {
           payTo: actualPayTo,
         }))
         console.warn('[agent-payment] quote/challenge mismatch', { expectedTerms, actualTerms })
-        throw new Error(`記事サーバーの支払条件が表示内容と異なります。署名していません。 表示: ${JSON.stringify(expectedTerms)} / API: ${JSON.stringify(actualTerms)}`)
+        throw new Error(`支払条件が確認画面の表示と一致しません。署名していません。 表示: ${JSON.stringify(expectedTerms)} / API: ${JSON.stringify(actualTerms)}`)
       }
 
-      const payload = await httpClient.createPaymentPayload(paymentRequired)
-      const headers = httpClient.encodePaymentSignatureHeader(payload)
+      const signer = toClientEvmSigner({
+        address,
+        signTypedData: (typedData) => walletClient.signTypedData({
+          ...typedData,
+          account: address,
+        } as never),
+      })
+      const client = new x402Client().register(BASE_SEPOLIA_NETWORK, new ExactEvmScheme(signer))
+      const httpClient = new x402HTTPClient(client)
+      const paymentPayload = await httpClient.createPaymentPayload(parsedPaymentRequired)
+      const headers = httpClient.encodePaymentSignatureHeader(paymentPayload)
       const paymentHeader = headers['PAYMENT-SIGNATURE'] ?? headers['payment-signature']
-      if (!paymentHeader) throw new Error('x402の支払署名ヘッダーを作成できませんでした。')
+      if (!paymentHeader) throw new Error('x402支払署名を作成できませんでした。')
 
       await postCallback({ status: 'approved', paymentHeader })
       callbackSent = true
@@ -144,7 +145,7 @@ function AgentApprovalPage() {
           await postCallback({ status: 'rejected' })
           callbackRejected = true
         } catch {
-          // The approval bridge may already have timed out or closed.
+          // The local bridge may already have timed out or closed.
         }
       }
       setState(callbackRejected ? 'rejected' : 'ready')
@@ -156,9 +157,9 @@ function AgentApprovalPage() {
     return (
       <section className="agent-approval">
         <div className="agent-approval-card">
-          <p className="eyebrow">SIGNAL JOURNAL · AGENT CHECKOUT</p>
+          <p className="eyebrow">X402 HTTP · WALLET APPROVAL</p>
           <h1>{state === 'complete' ? '署名を送信しました' : '購入をキャンセルしました'}</h1>
-          <p>{state === 'complete' ? 'OpenCodeが決済を検証し、成功した場合に記事を取得します。この画面を閉じてください。' : '決済は送信されていません。この画面を閉じてください。'}</p>
+          <p>{state === 'complete' ? 'x402クライアントが決済を検証し、成功した場合にリソースを取得します。この画面を閉じてください。' : '支払いは送信されていません。この画面を閉じてください。'}</p>
           {error && <p className="payment-error" role="alert">{error}</p>}
         </div>
       </section>
@@ -168,17 +169,18 @@ function AgentApprovalPage() {
   return (
     <section className="agent-approval">
       <div className="agent-approval-card">
-        <p className="eyebrow">SIGNAL JOURNAL · AGENT CHECKOUT</p>
-        <h1>購入内容を確認</h1>
-        <p className="agent-approval-intro">OpenCodeのAIエージェントが、次の記事を取得しようとしています。</p>
+        <p className="eyebrow">X402 HTTP · WALLET APPROVAL</p>
+        <h1>HTTPリソースの購入を確認</h1>
+        <p className="agent-approval-intro">OpenCodeの汎用x402クライアントが、このURLから取得しようとしています。</p>
         <dl className="agent-payment-terms">
-          <div><dt>記事</dt><dd>{title}</dd></div>
-          <div><dt>金額</dt><dd>{(Number(amount) / 1_000_000).toFixed(2)} USDC</dd></div>
+          <div><dt>リソース</dt><dd>{description}</dd></div>
+          <div><dt>URL</dt><dd><code>{url}</code></dd></div>
+          <div><dt>金額</dt><dd>{formatUsdc(amount)} USDC</dd></div>
           <div><dt>ネットワーク</dt><dd>Base Sepolia</dd></div>
           <div><dt>受取先</dt><dd><code>{payTo}</code></dd></div>
           <div><dt>支払通貨</dt><dd><code>{asset}</code></dd></div>
         </dl>
-        <p className="agent-approval-note">ウォレット署名を行うと、この金額の支払いが承認されます。署名後、OpenCodeが決済を検証して記事を取得します。</p>
+        <p className="agent-approval-note">ウォレット署名でこの金額の支払いを許可します。OpenCodeは署名済みpayloadを表示中のURLだけへ送信します。</p>
         {!isConnected ? (
           <p className="agent-approval-hint">ページ上部からウォレットを接続してください。</p>
         ) : chainId !== baseSepolia.id ? (

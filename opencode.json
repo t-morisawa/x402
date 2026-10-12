@@ -1,14 +1,20 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
-    "signaljournal": {
+    "mocksearch": {
       "type": "local",
-      "command": ["node", "--import", "tsx", "agent-mcp/src/index.ts"],
+      "command": ["node", "--import", "tsx", "search-mcp/src/index.ts"],
+      "cwd": ".",
+      "enabled": true
+    },
+    "x402http": {
+      "type": "local",
+      "command": ["node", "--import", "tsx", "x402-http-mcp/src/index.ts"],
       "cwd": ".",
       "enabled": true
     }
   },
   "permission": {
-    "signaljournal_purchase_article": "ask"
+    "x402http_fetch_url": "ask"
   }
 }

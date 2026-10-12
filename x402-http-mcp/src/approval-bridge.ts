@@ -3,6 +3,7 @@ import { createServer } from 'node:http'
 import { spawn } from 'node:child_process'
 import type { PaymentPayload } from '@x402/core/types'
 
+// ウォレット画面の操作が終わるまで、ローカルcallbackを最大3分待つ。
 const CALLBACK_TIMEOUT_MS = 3 * 60 * 1000
 const MAX_BODY_BYTES = 64 * 1024
 
@@ -10,6 +11,10 @@ type ApprovalResult =
   | { status: 'approved'; quoteId: string; paymentHeader: string }
   | { status: 'rejected'; quoteId: string }
 
+/**
+ * 承認画面のURLを既定のブラウザーで開く。
+ * ブラウザープロセスはMCP処理から切り離し、起動した時点で呼び出し元へ戻る。
+ */
 async function launchBrowser(url: string) {
   const command = process.platform === 'darwin'
     ? 'open'
@@ -27,6 +32,13 @@ async function launchBrowser(url: string) {
   })
 }
 
+/**
+ * ローカルのウォレット承認画面を開き、承認・拒否の結果を待ち受ける。
+ *
+ * 127.0.0.1だけで一時HTTPサーバーを起動し、信頼したUI originと一回限りのnonceを確認したcallbackだけを受け付ける。
+ * 承認時は署名済みPAYMENT-SIGNATUREヘッダーを返し、拒否・タイムアウト時はその状態を返す。
+ * ここでは支払いを送信せず、署名payloadを呼び出し元へ渡すだけ。
+ */
 export async function requestWalletApproval(options: {
   approvalPageUrl: string
   uiOrigin: string
@@ -86,6 +98,7 @@ export async function requestWalletApproval(options: {
         if (body.status === 'rejected') {
           settled = true
           response.writeHead(200, { 'Content-Type': 'application/json' }).end('{"ok":true}')
+          // promiseを返して待機中だった処理を進める
           resolveResult({ status: 'rejected', quoteId: options.quoteId })
           return
         }
@@ -96,6 +109,7 @@ export async function requestWalletApproval(options: {
 
         settled = true
         response.writeHead(200, { 'Content-Type': 'application/json' }).end('{"ok":true}')
+        // promiseを返して待機中だった処理を進める
         resolveResult({
           status: 'approved',
           quoteId: options.quoteId,
@@ -137,6 +151,7 @@ export async function requestWalletApproval(options: {
 
   try {
     await launchBrowser(approvalUrl.toString())
+    // ここでユーザの入力を待機（コールバックでpromiseを解決）
     return await resultPromise
   } finally {
     clearTimeout(timeout)
@@ -144,6 +159,10 @@ export async function requestWalletApproval(options: {
   }
 }
 
+/**
+ * 外部から受け取った値がx402 v2 PaymentPayloadの最低限の形を満たすか検証する。
+ * trueの場合はTypeScript上でもPaymentPayloadとして扱えるよう型を絞り込む。
+ */
 export function isPaymentPayload(value: unknown): value is PaymentPayload {
   if (!value || typeof value !== 'object') return false
   const payload = value as Partial<PaymentPayload>

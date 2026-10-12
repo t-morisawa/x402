@@ -9,7 +9,7 @@
     },
     "x402http": {
       "type": "local",
-      "command": ["node", "--import", "tsx", "agent-mcp/src/index.ts"],
+      "command": ["node", "--import", "tsx", "x402-http-mcp/src/index.ts"],
       "cwd": ".",
       "enabled": true
     }

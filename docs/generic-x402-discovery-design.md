@@ -201,7 +201,7 @@ OpenCodeへ登録するのは、記事提供者固有のMCPではなく、モッ
     },
     "x402http": {
       "type": "local",
-      "command": ["node", "--import", "tsx", "agent-mcp/src/index.ts"]
+      "command": ["node", "--import", "tsx", "x402-http-mcp/src/index.ts"]
     }
   },
   "permission": {
@@ -210,11 +210,12 @@ OpenCodeへ登録するのは、記事提供者固有のMCPではなく、モッ
 }
 ```
 
-検索MCPは`search-mcp/src/index.ts`、汎用x402 MCPは既存`agent-mcp/src/index.ts`を記事非依存に変更して実装する。MCP tool名のprefix・permission keyはOpenCodeのtool名に合わせて設定する。
+検索MCPは`search-mcp/src/index.ts`、汎用x402 HTTPクライアントMCPは`x402-http-mcp/src/index.ts`に実装する。MCP tool名のprefix・permission keyはOpenCodeのtool名に合わせて設定する。
 
-## 11. 既存実装からの変更案
+## 11. 実装ファイル構成
 
-- `agent-mcp`は`inspect_url`と`fetch_url`を提供し、記事データに依存せず許可origin上のURLを扱う。
+- `x402-http-mcp`は`inspect_url`と`fetch_url`を提供し、記事データに依存せず許可origin上のURLを扱う。
+- `x402-http-mcp/src/index.ts`にはMCP toolと決済フローを置き、`config.ts`、`resource-http.ts`、`payment-policy.ts`へURL設定・HTTP処理・quote検証のhelperを分離する。
 - `search-mcp`は検索モック`search_web`を提供し、記事URLとスニペットのみを返す。
 - `src/routes/agent/approve.tsx`は汎用resource URLとx402 challengeの条件を表示する。MCPからchallengeを受け取るため、リソースoriginのCORSに依存しない。
 - `src/routes/api/article/$slug.ts`、`src/lib/payment.server.ts`、facilitator連携は原則変更不要。

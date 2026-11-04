@@ -60,10 +60,11 @@ export async function handleAcp(request: Request, run: Handler): Promise<Respons
   }
 
   const key = request.headers.get('idempotency-key')
+  if (key && key.length <= 255) headers['idempotency-key'] = key
   if (!key || key.length > 255) {
     return respond({
       status: 400,
-      body: { type: 'request_not_idempotent', code: 'missing_idempotency_key', message: 'Idempotency-Key(255文字以内)が必要です' },
+      body: { type: 'invalid_request', code: 'idempotency_key_required', message: 'Idempotency-Key header is required (max 255 characters)' },
     })
   }
 
@@ -82,10 +83,13 @@ export async function handleAcp(request: Request, run: Handler): Promise<Respons
   const cached = idempotency.get(cacheKey)
   if (cached) {
     if (cached.hash !== hash) {
-      return respond({ status: 409, body: { type: 'request_not_idempotent', code: 'idempotency_conflict', message: '同じ Idempotency-Key で異なる本文が送られました' } })
+      return respond({ status: 422, body: { type: 'invalid_request', code: 'idempotency_conflict', message: 'Idempotency-Key has already been used with a different request body' } })
     }
     if (!cached.result) {
-      return respond({ status: 409, body: { type: 'request_not_idempotent', code: 'idempotency_in_flight', message: '同じ Idempotency-Key のリクエストを処理中です' } })
+      return respond(
+        { status: 409, body: { type: 'invalid_request', code: 'idempotency_in_flight', message: 'A request with this Idempotency-Key is currently being processed' } },
+        { 'retry-after': '1' },
+      )
     }
     return respond(cached.result, { 'idempotent-replayed': 'true' })
   }

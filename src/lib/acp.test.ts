@@ -82,8 +82,9 @@ describe('ACP checkout', () => {
     assert.equal((await replay.json()).id, (await first.json()).id)
 
     const conflict = await route(post('/api/acp/checkout_sessions', { line_items: [] }, headers))
-    assert.equal(conflict.status, 409)
+    assert.equal(conflict.status, 422)
     assert.equal((await conflict.json()).code, 'idempotency_conflict')
+    assert.equal(replay.headers.get('idempotency-key'), 'fixed-key')
   })
 
   it('認証・APIバージョン・Idempotency-Keyが無ければ拒否する', async () => {
@@ -94,7 +95,7 @@ describe('ACP checkout', () => {
       headers: { authorization: 'Bearer test', 'api-version': '2026-04-17' },
       body: '{}',
     })
-    assert.equal((await (await route(noKey)).json()).code, 'missing_idempotency_key')
+    assert.equal((await (await route(noKey)).json()).code, 'idempotency_key_required')
   })
 
   it('cancel後は再cancelもcompleteも405、handler不一致のcompleteは400', async () => {

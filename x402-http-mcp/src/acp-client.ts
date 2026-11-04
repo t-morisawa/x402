@@ -7,7 +7,7 @@ import { parseJsonBody, readLimitedBody } from './resource-http.ts'
 
 // ACP(Agentic Commerce Protocol)のcheckout REST APIを呼ぶ薄いクライアント。
 export const ACP_API_VERSION = '2026-04-17'
-export const X402_HANDLER_NAME = 'dev.x402.exact_evm'
+export const X402_HANDLER_NAME = 'example.x402poc.exact_evm'
 
 export type AcpSession = {
   id: string

@@ -84,7 +84,7 @@ export function PaidArticle({ article }: { article: Article }) {
         buyer: { wallet_address: address },
       })
       const handler = session.capabilities.payment.handlers.find(
-        (item: { name: string }) => item.name === 'dev.x402.exact_evm',
+        (item: { name: string }) => item.name === 'example.x402poc.exact_evm',
       )
       if (session.status !== 'ready_for_payment' || !handler?.config.payment_required) {
         throw new Error(session.messages?.[0]?.content || '購入を開始できませんでした。')

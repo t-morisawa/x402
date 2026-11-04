@@ -123,7 +123,7 @@ async function render(session: Session, origin: string) {
   const handlers = [
     {
       id: X402_HANDLER_ID,
-      name: 'dev.x402.exact_evm',
+      name: 'example.x402poc.exact_evm',
       version: ACP_API_VERSION,
       psp: 'x402',
       requires_delegate_payment: false,

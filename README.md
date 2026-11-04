@@ -63,7 +63,7 @@ npm run dev
 - 商品ID (`line_items[].id`) は記事のslugです。数量は1のみです。
 - 自己送金モード (`X402_PAY_TO`未設定) では、`buyer.wallet_address`を指定するまで`not_ready_for_payment`です。
 
-公式ACPにx402の決済手段はないため、決済は独自のpayment handler `dev.x402.exact_evm` として宣言しています。カード/SPT (Stripe等) には対応していません。通貨は`usdc`、金額はUSDC最小単位(6桁)の整数です。
+公式ACPにx402の決済手段はないため、決済は独自のpayment handler `example.x402poc.exact_evm` として宣言しています。カード/SPT (Stripe等) には対応していません。通貨は`usdc`、金額はUSDC最小単位(6桁)の整数です。
 
 1. セッションが`ready_for_payment`になると、handlerの`config.payment_required`にx402の支払い要件(`PAYMENT-REQUIRED`ヘッダー値)が入ります。
 2. クライアントがこれに署名し、`complete`の`payment_data.instrument.credential.token`に`PAYMENT-SIGNATURE`値を渡します (`handler_id`は`x402_exact_evm_base_sepolia`)。

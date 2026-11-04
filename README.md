@@ -53,3 +53,22 @@ npm run dev
 `mocksearch`のtoolは`search_web`、`x402http`のtoolは`inspect_url`と`fetch_url`です。x402クライアントはHTTP GET専用で、URLのoriginをallowlistと照合し、Base Sepolia USDCの0.10 USDC以下の要求だけ扱います。OpenCodeを`--auto`で起動せず、permissionでは`once`を選んでください。ウォレット署名は毎回必要です。
 
 `X402_DEMO_URL`は承認画面・検索結果のURLを作るWebサーバーURLで、既定値は`http://localhost:3000`です。WalletConnectでスマートフォンのウォレットを使う場合は、上記Web決済手順と同様に`VITE_WALLETCONNECT_PROJECT_ID`も設定してください。
+
+## ACP (Agentic Commerce Protocol) 購入フロー
+
+購入フローは[ACP](https://github.com/agentic-commerce-protocol/agentic-commerce-protocol) (仕様 `2026-04-17`) のcheckout APIに準拠しています。ブラウザーもエージェントも同じAPIを使います。
+
+- `POST /api/acp/checkout_sessions` (create) / `POST .../{id}` (update) / `GET .../{id}` / `POST .../{id}/complete` / `POST .../{id}/cancel`
+- 必須ヘッダー: `Authorization: Bearer <任意>` (`ACP_API_KEY`を設定すると一致を確認)、`API-Version: 2026-04-17`、全POSTに`Idempotency-Key`
+- 商品ID (`line_items[].id`) は記事のslugです。数量は1のみです。
+- 自己送金モード (`X402_PAY_TO`未設定) では、`buyer.wallet_address`を指定するまで`not_ready_for_payment`です。
+
+公式ACPにx402の決済手段はないため、決済は独自のpayment handler `dev.x402.exact_evm` として宣言しています。カード/SPT (Stripe等) には対応していません。通貨は`usdc`、金額はUSDC最小単位(6桁)の整数です。
+
+1. セッションが`ready_for_payment`になると、handlerの`config.payment_required`にx402の支払い要件(`PAYMENT-REQUIRED`ヘッダー値)が入ります。
+2. クライアントがこれに署名し、`complete`の`payment_data.instrument.credential.token`に`PAYMENT-SIGNATURE`値を渡します (`handler_id`は`x402_exact_evm_base_sepolia`)。
+3. 決済成功で`completed`になり、`order`に取引情報と記事本文 (独自拡張) が入ります。
+
+エージェント用には`x402http` MCPに`acp_create_checkout` / `acp_update_checkout` / `acp_get_checkout` / `acp_cancel_checkout` / `acp_complete_checkout`があります。OpenCode (`opencode.json`) とClaude Code (`.mcp.json`) のどちらでも同じstdio MCPを使えます。`acp_complete_checkout`だけが署名画面を開き、決済は毎回ウォレット署名が必要です。検索結果の`productId`をそのまま`acp_create_checkout`に渡します。
+
+`npm test`でcheckout APIのテスト (facilitatorはスタブ) を実行できます。

@@ -1,5 +1,9 @@
+import { ARTICLE_PRICE_UNITS } from '../lib/payment-config.ts'
+
 export type Article = {
   slug: string
+  // USDC最小単位(6桁)の価格
+  priceUnits: string
   category: string
   title: string
   lead: string
@@ -12,6 +16,7 @@ export type Article = {
 export const articles: Article[] = [
   {
     slug: 'ai-agents-economy',
+    priceUnits: ARTICLE_PRICE_UNITS,
     category: 'TECHNOLOGY',
     title: 'AIエージェントは、どうやって自分で買い物をするのか',
     lead: '人の代わりにサービスを探し、必要な分だけ支払う。自律型エージェントの経済圏を支える「HTTP 402」の新しい使い方。',
@@ -22,6 +27,7 @@ export const articles: Article[] = [
   },
   {
     slug: 'stablecoin-everyday',
+    priceUnits: ARTICLE_PRICE_UNITS,
     category: 'FINANCE',
     title: 'ステーブルコインが「送金」から「決済」へ変わる日',
     lead: '価格の安定だけではない。インターネット上の小さな取引を、国境や営業時間を越えてつなぐ新しい決済レール。',
@@ -32,6 +38,7 @@ export const articles: Article[] = [
   },
   {
     slug: 'web-micropayments',
+    priceUnits: ARTICLE_PRICE_UNITS,
     category: 'CULTURE',
     title: '「読むたびに払う」ウェブは、メディアを救うのか',
     lead: '広告か、月額購読か。その二択のあいだに、記事一つから始められるマイクロペイメントという選択肢が生まれている。',

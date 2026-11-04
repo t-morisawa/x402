@@ -58,6 +58,7 @@ server.registerTool(
       .filter(({ score }) => terms.length === 0 || score > 0)
       .sort((a, b) => b.score - a.score)
       .map(({ article }) => ({
+        productId: article.slug,
         title: article.title,
         snippet: article.lead,
         url: new URL(`/api/article/${encodeURIComponent(article.slug)}`, baseUrl).toString(),

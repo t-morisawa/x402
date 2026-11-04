@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { ExactEvmScheme, toClientEvmSigner } from '@x402/evm'
-import { wrapFetchWithPayment, x402Client } from '@x402/fetch'
+import { x402Client, x402HTTPClient } from '@x402/fetch'
+import { decodePaymentRequiredHeader } from '@x402/core/http'
 import { baseSepolia } from 'wagmi/chains'
 import { useAccount, useSwitchChain, useWalletClient } from 'wagmi'
 import type { Article } from '../data/articles'
@@ -11,6 +12,23 @@ type PaidContent = {
   body: string[]
   transaction: string
   payer: string
+}
+
+// ACP checkout APIを呼ぶ。エラー時はACPのmessageを例外にする。
+async function acpFetch(path: string, body: unknown) {
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer demo',
+      'API-Version': '2026-04-17',
+      'Content-Type': 'application/json',
+      'Idempotency-Key': crypto.randomUUID(),
+    },
+    body: JSON.stringify(body),
+  })
+  const result = await response.json()
+  if (!response.ok) throw new Error(result.message || '決済に失敗しました。')
+  return result
 }
 
 export function PaidArticle({ article }: { article: Article }) {
@@ -58,20 +76,39 @@ export function PaidArticle({ article }: { article: Article }) {
         // ExactEvmSchemeは支払い要求を受け取ると、EIP-3009の署名に必要なデータを組み立て、渡されたsigner.signTypedDataを呼び出します
         new ExactEvmScheme(signer),
       )
-      // APIコールをx402でラップする。
-      // 402応答を受けた際にx402が署名と支払い付き再送を行うfetchを作る。
-      const fetchWithPayment = wrapFetchWithPayment(fetch, client)
-      // 記事APIを呼び出す。内部にユーザの署名待ちと、署名後のコールバック処理が含まれる。
-      const response = await fetchWithPayment(
-        // payToはこのウォレット自身に指定する。
-        `/api/article/${article.slug}?payTo=${encodeURIComponent(address)}`,
+      const httpClient = new x402HTTPClient(client)
+
+      // 1. ACPのチェックアウトセッションを作る。自己送金モード(X402_PAY_TO未設定)では接続ウォレットが受取先になる。
+      const session = await acpFetch('/api/acp/checkout_sessions', {
+        line_items: [{ id: article.slug, quantity: 1 }],
+        buyer: { wallet_address: address },
+      })
+      const handler = session.capabilities.payment.handlers.find(
+        (item: { name: string }) => item.name === 'dev.x402.exact_evm',
       )
-      // API応答をJSONとして読み取る。
-      const result = await response.json()
-      // HTTPエラーならAPIが返した内容を表示用の例外にする。
-      if (!response.ok) throw new Error(result.error || '決済に失敗しました。')
-      // 成功応答に取引ハッシュがなければ、決済完了として扱わない。
-      if (!result.transaction) throw new Error('決済応答に取引ハッシュがありません。')
+      if (session.status !== 'ready_for_payment' || !handler?.config.payment_required) {
+        throw new Error(session.messages?.[0]?.content || '購入を開始できませんでした。')
+      }
+
+      // 2. セッションが返したx402の支払い要件に署名する(ここでウォレット承認が入る)。
+      const paymentRequired = decodePaymentRequiredHeader(handler.config.payment_required)
+      const paymentPayload = await httpClient.createPaymentPayload(paymentRequired)
+      const headers = httpClient.encodePaymentSignatureHeader(paymentPayload)
+      const token = headers['PAYMENT-SIGNATURE'] ?? headers['payment-signature']
+      if (!token) throw new Error('支払い署名を作成できませんでした。')
+
+      // 3. 署名をcompleteに渡して決済を確定する。
+      const completed = await acpFetch(`/api/acp/checkout_sessions/${session.id}/complete`, {
+        payment_data: {
+          handler_id: handler.id,
+          instrument: { type: 'x402', credential: { type: 'x402_payment_signature', token } },
+        },
+      })
+      const receipt = completed.order?.x402
+      if (completed.status !== 'completed' || !receipt?.transaction) {
+        throw new Error(completed.messages?.[0]?.content || '決済に失敗しました。')
+      }
+      const result = { body: completed.order.content.body, transaction: receipt.transaction, payer: receipt.payer }
       // 決済済みの記事本文と取引情報を画面に反映する。
       setContent(result as PaidContent)
     } catch (cause) {

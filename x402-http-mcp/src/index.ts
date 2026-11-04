@@ -22,8 +22,11 @@ import {
   requestResource,
 } from './resource-http.ts'
 import { isPaymentPayload, requestWalletApproval } from './approval-bridge.ts'
+import { acpRequest, getSessionPaymentRequired, summarizeSession, X402_HANDLER_NAME, type AcpSession } from './acp-client.ts'
 
 const quotes = new Map<string, Quote>()
+// ACP checkoutのquoteIdと、対応するsessionIdの対応表
+const quoteSessions = new Map<string, string>()
 
 /** MCP toolへJSON形式の結果、またはエラーを返す。 */
 function toolResult(value: unknown, isError = false) {
@@ -153,6 +156,186 @@ function createServer() {
       } catch (error) {
         if (!callbackCompleted) quotes.delete(quoteId)
         return toolResult({ error: error instanceof Error ? error.message : 'x402 resource fetch failed' }, true)
+      }
+    },
+  )
+
+
+  // ---- ACP (Agentic Commerce Protocol) checkout tools ----
+  const sessionPath = (sessionId: string) => `/api/acp/checkout_sessions/${encodeURIComponent(sessionId)}`
+  const productId = z.string().regex(/^[a-z0-9-]{1,100}$/)
+  const walletAddress = z.string().regex(/^0x[a-fA-F0-9]{40}$/)
+
+  /** セッション要約を返す。ready_for_paymentなら、支払い条件のquoteも発行する。 */
+  function describeSession(session: AcpSession) {
+    const summary = summarizeSession(session)
+    const required = getSessionPaymentRequired(session)
+    if (!required) return summary
+    const requirement = selectAllowedRequirement(required)
+    const quote = createQuote({ url: required.resource.url, requirement, description: required.resource.description || required.resource.url })
+    quotes.set(quote.quoteId, quote)
+    quoteSessions.set(quote.quoteId, session.id)
+    removeExpiredQuotes()
+    return {
+      ...summary,
+      quoteId: quote.quoteId,
+      amount: `${formatUsdc(requirement.amount)} USDC`,
+      asset: requirement.asset,
+      network: requirement.network,
+      payTo: requirement.payTo,
+      expiresAt: new Date(quote.expiresAt).toISOString(),
+      note: 'These terms came from the ACP checkout session (x402 payment handler). No payment has been made.',
+    }
+  }
+
+  const acpTool = (handler: (args: any) => Promise<AcpSession>) => async (args: unknown) => {
+    try {
+      return toolResult(describeSession(await handler(args)))
+    } catch (error) {
+      return toolResult({ error: error instanceof Error ? error.message : 'ACP request failed' }, true)
+    }
+  }
+
+  server.registerTool(
+    'acp_create_checkout',
+    {
+      title: 'Create an ACP checkout session',
+      description: 'Create an ACP checkout session for a product (productId is the article slug). No payment is made. If walletAddress is required, the result says so; update the session with it.',
+      inputSchema: { productId, buyerEmail: z.string().email().max(200).optional(), walletAddress: walletAddress.optional() },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    acpTool(({ productId: id, buyerEmail, walletAddress: wallet }) => acpRequest('POST', '/api/acp/checkout_sessions', {
+      line_items: [{ id, quantity: 1 }],
+      buyer: { email: buyerEmail, wallet_address: wallet },
+    })),
+  )
+
+  server.registerTool(
+    'acp_update_checkout',
+    {
+      title: 'Update an ACP checkout session',
+      description: 'Update buyer information of an ACP checkout session. No payment is made.',
+      inputSchema: { sessionId: z.string().max(100), buyerEmail: z.string().email().max(200).optional(), walletAddress: walletAddress.optional() },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    acpTool(({ sessionId, buyerEmail, walletAddress: wallet }) => acpRequest('POST', sessionPath(sessionId), {
+      buyer: { email: buyerEmail, wallet_address: wallet },
+    })),
+  )
+
+  server.registerTool(
+    'acp_get_checkout',
+    {
+      title: 'Get an ACP checkout session',
+      description: 'Read the current state of an ACP checkout session. Issues a fresh quote when it is ready for payment.',
+      inputSchema: { sessionId: z.string().max(100) },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    acpTool(({ sessionId }) => acpRequest('GET', sessionPath(sessionId))),
+  )
+
+  server.registerTool(
+    'acp_cancel_checkout',
+    {
+      title: 'Cancel an ACP checkout session',
+      description: 'Cancel an ACP checkout session that has not been completed.',
+      inputSchema: { sessionId: z.string().max(100) },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    acpTool(({ sessionId }) => acpRequest('POST', `${sessionPath(sessionId)}/cancel`)),
+  )
+
+  // 承認とウォレット署名の後にだけ complete を呼ぶ。
+  server.registerTool(
+    'acp_complete_checkout',
+    {
+      title: 'Pay for and complete an ACP checkout session',
+      description: 'After showing the quote from acp_create_checkout/acp_update_checkout/acp_get_checkout and receiving the user’s request to proceed, ask for approval, then open a wallet confirmation page. Completes the session only after the user signs.',
+      inputSchema: {
+        sessionId: z.string().max(100),
+        quoteId: z.string().uuid(),
+        confirmedAmount: z.string().min(1).max(40),
+        confirmedNetwork: z.string().min(1).max(40),
+        confirmedAsset: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
+        confirmedPayTo: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+    },
+    async ({ sessionId, quoteId, confirmedAmount, confirmedNetwork, confirmedAsset, confirmedPayTo }) => {
+      let callbackCompleted = false
+      try {
+        // 1. quoteがこのsessionのものか、利用者が確認した条件と一致するかを検証する。
+        const quote = quotes.get(quoteId)
+        if (!quote || quoteSessions.get(quoteId) !== sessionId || quote.expiresAt <= Date.now()) {
+          throw new Error('Quote not found or expired. Get the checkout session again before purchasing.')
+        }
+        validateConfirmedTerms({ quote, confirmedAmount, confirmedNetwork, confirmedAsset, confirmedPayTo })
+
+        // 2. セッションを取り直し、支払い条件がquoteから変わっていなければ署名画面へ進む。
+        const challengeOf = async () => {
+          const session = await acpRequest('GET', sessionPath(sessionId))
+          const required = getSessionPaymentRequired(session)
+          if (!required) throw new Error(`Checkout session is not ready for payment (status: ${session.status})`)
+          const handler = session.capabilities.payment.handlers.find((item) => item.name === X402_HANDLER_NAME)!
+          return { handlerId: handler.id, challenge: { required, requirement: selectAllowedRequirement(required) } }
+        }
+        const before = await challengeOf()
+        if (!challengeMatchesQuote(before.challenge, quote)) {
+          throw new Error('The checkout details or payment terms changed since the quote. No signature was requested; get the session again.')
+        }
+
+        // 3. ウォレット署名を待つ。
+        const approval = await collectWalletApproval(quote, before.challenge)
+        callbackCompleted = true
+        quotes.delete(quoteId)
+        quoteSessions.delete(quoteId)
+        if (approval.status !== 'approved') throw new Error('Wallet signature was rejected. No payment was sent.')
+        if (quote.expiresAt <= Date.now()) {
+          throw new Error('Quote expired while waiting for wallet approval. The signed payload was not sent.')
+        }
+
+        // 4. 署名を検証し、直前にもう一度条件を確認してから complete を呼ぶ。
+        decodeAndValidatePayload(approval.paymentHeader, quote)
+        const latest = await challengeOf()
+        if (!challengeMatchesQuote(latest.challenge, quote)) {
+          throw new Error('The checkout details or payment terms changed after signing. The signed payload was not sent.')
+        }
+        const completed = await acpRequest('POST', `${sessionPath(sessionId)}/complete`, {
+          payment_data: {
+            handler_id: latest.handlerId,
+            instrument: { type: 'x402', credential: { type: 'x402_payment_signature', token: approval.paymentHeader } },
+          },
+        })
+
+        // 5. completed とsettlement receiptを確認して結果を返す。
+        const receipt = completed.order?.x402
+        if (
+          completed.status !== 'completed' ||
+          !receipt?.transaction ||
+          receipt.network !== quote.requirement.network ||
+          receipt.amount !== quote.requirement.amount
+        ) {
+          const reason = completed.messages.map((message) => message.content).join(' / ')
+          throw new Error(`Checkout was not completed (status: ${completed.status}). ${reason}`.trim())
+        }
+        return toolResult({
+          ...summarizeSession(completed),
+          orderId: completed.order?.id,
+          content: completed.order?.content,
+          payment: {
+            amount: `${formatUsdc(quote.requirement.amount)} USDC`,
+            network: receipt.network,
+            payer: receipt.payer,
+            transaction: receipt.transaction,
+            explorerUrl: `https://sepolia.basescan.org/tx/${receipt.transaction}`,
+          },
+        })
+      } catch (error) {
+        if (!callbackCompleted) {
+          quotes.delete(quoteId)
+          quoteSessions.delete(quoteId)
+        }
+        return toolResult({ error: error instanceof Error ? error.message : 'ACP checkout failed' }, true)
       }
     },
   )

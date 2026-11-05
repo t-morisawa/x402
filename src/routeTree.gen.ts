@@ -12,7 +12,11 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AgentApproveRouteImport } from './routes/agent/approve'
 import { Route as ArticleSlugRouteImport } from './routes/article/$slug'
+import { Route as ApiAcpCheckout_sessionsRouteImport } from './routes/api/acp/checkout_sessions'
 import { Route as ApiArticleSlugRouteImport } from './routes/api/article/$slug'
+import { Route as ApiAcpCheckout_sessionsIdRouteImport } from './routes/api/acp/checkout_sessions.$id'
+import { Route as ApiAcpCheckout_sessionsIdCancelRouteImport } from './routes/api/acp/checkout_sessions.$id.cancel'
+import { Route as ApiAcpCheckout_sessionsIdCompleteRouteImport } from './routes/api/acp/checkout_sessions.$id.complete'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -29,48 +33,104 @@ const ArticleSlugRoute = ArticleSlugRouteImport.update({
   path: '/article/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAcpCheckout_sessionsRoute = ApiAcpCheckout_sessionsRouteImport.update({
+  id: '/api/acp/checkout_sessions',
+  path: '/api/acp/checkout_sessions',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiArticleSlugRoute = ApiArticleSlugRouteImport.update({
   id: '/api/article/$slug',
   path: '/api/article/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAcpCheckout_sessionsIdRoute =
+  ApiAcpCheckout_sessionsIdRouteImport.update({
+    id: '/$id',
+    path: '/$id',
+    getParentRoute: () => ApiAcpCheckout_sessionsRoute,
+  } as any)
+const ApiAcpCheckout_sessionsIdCancelRoute =
+  ApiAcpCheckout_sessionsIdCancelRouteImport.update({
+    id: '/cancel',
+    path: '/cancel',
+    getParentRoute: () => ApiAcpCheckout_sessionsIdRoute,
+  } as any)
+const ApiAcpCheckout_sessionsIdCompleteRoute =
+  ApiAcpCheckout_sessionsIdCompleteRouteImport.update({
+    id: '/complete',
+    path: '/complete',
+    getParentRoute: () => ApiAcpCheckout_sessionsIdRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/agent/approve': typeof AgentApproveRoute
   '/article/$slug': typeof ArticleSlugRoute
+  '/api/acp/checkout_sessions': typeof ApiAcpCheckout_sessionsRouteWithChildren
   '/api/article/$slug': typeof ApiArticleSlugRoute
+  '/api/acp/checkout_sessions/$id': typeof ApiAcpCheckout_sessionsIdRouteWithChildren
+  '/api/acp/checkout_sessions/$id/cancel': typeof ApiAcpCheckout_sessionsIdCancelRoute
+  '/api/acp/checkout_sessions/$id/complete': typeof ApiAcpCheckout_sessionsIdCompleteRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/agent/approve': typeof AgentApproveRoute
   '/article/$slug': typeof ArticleSlugRoute
+  '/api/acp/checkout_sessions': typeof ApiAcpCheckout_sessionsRouteWithChildren
   '/api/article/$slug': typeof ApiArticleSlugRoute
+  '/api/acp/checkout_sessions/$id': typeof ApiAcpCheckout_sessionsIdRouteWithChildren
+  '/api/acp/checkout_sessions/$id/cancel': typeof ApiAcpCheckout_sessionsIdCancelRoute
+  '/api/acp/checkout_sessions/$id/complete': typeof ApiAcpCheckout_sessionsIdCompleteRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/agent/approve': typeof AgentApproveRoute
   '/article/$slug': typeof ArticleSlugRoute
+  '/api/acp/checkout_sessions': typeof ApiAcpCheckout_sessionsRouteWithChildren
   '/api/article/$slug': typeof ApiArticleSlugRoute
+  '/api/acp/checkout_sessions/$id': typeof ApiAcpCheckout_sessionsIdRouteWithChildren
+  '/api/acp/checkout_sessions/$id/cancel': typeof ApiAcpCheckout_sessionsIdCancelRoute
+  '/api/acp/checkout_sessions/$id/complete': typeof ApiAcpCheckout_sessionsIdCompleteRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/agent/approve' | '/article/$slug' | '/api/article/$slug'
+  fullPaths:
+    | '/'
+    | '/agent/approve'
+    | '/article/$slug'
+    | '/api/acp/checkout_sessions'
+    | '/api/article/$slug'
+    | '/api/acp/checkout_sessions/$id'
+    | '/api/acp/checkout_sessions/$id/cancel'
+    | '/api/acp/checkout_sessions/$id/complete'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/agent/approve' | '/article/$slug' | '/api/article/$slug'
+  to:
+    | '/'
+    | '/agent/approve'
+    | '/article/$slug'
+    | '/api/acp/checkout_sessions'
+    | '/api/article/$slug'
+    | '/api/acp/checkout_sessions/$id'
+    | '/api/acp/checkout_sessions/$id/cancel'
+    | '/api/acp/checkout_sessions/$id/complete'
   id:
     | '__root__'
     | '/'
     | '/agent/approve'
     | '/article/$slug'
+    | '/api/acp/checkout_sessions'
     | '/api/article/$slug'
+    | '/api/acp/checkout_sessions/$id'
+    | '/api/acp/checkout_sessions/$id/cancel'
+    | '/api/acp/checkout_sessions/$id/complete'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AgentApproveRoute: typeof AgentApproveRoute
   ArticleSlugRoute: typeof ArticleSlugRoute
+  ApiAcpCheckout_sessionsRoute: typeof ApiAcpCheckout_sessionsRouteWithChildren
   ApiArticleSlugRoute: typeof ApiArticleSlugRoute
 }
 
@@ -97,6 +157,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ArticleSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/acp/checkout_sessions': {
+      id: '/api/acp/checkout_sessions'
+      path: '/api/acp/checkout_sessions'
+      fullPath: '/api/acp/checkout_sessions'
+      preLoaderRoute: typeof ApiAcpCheckout_sessionsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/article/$slug': {
       id: '/api/article/$slug'
       path: '/api/article/$slug'
@@ -104,13 +171,66 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiArticleSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/acp/checkout_sessions/$id': {
+      id: '/api/acp/checkout_sessions/$id'
+      path: '/$id'
+      fullPath: '/api/acp/checkout_sessions/$id'
+      preLoaderRoute: typeof ApiAcpCheckout_sessionsIdRouteImport
+      parentRoute: typeof ApiAcpCheckout_sessionsRoute
+    }
+    '/api/acp/checkout_sessions/$id/cancel': {
+      id: '/api/acp/checkout_sessions/$id/cancel'
+      path: '/cancel'
+      fullPath: '/api/acp/checkout_sessions/$id/cancel'
+      preLoaderRoute: typeof ApiAcpCheckout_sessionsIdCancelRouteImport
+      parentRoute: typeof ApiAcpCheckout_sessionsIdRoute
+    }
+    '/api/acp/checkout_sessions/$id/complete': {
+      id: '/api/acp/checkout_sessions/$id/complete'
+      path: '/complete'
+      fullPath: '/api/acp/checkout_sessions/$id/complete'
+      preLoaderRoute: typeof ApiAcpCheckout_sessionsIdCompleteRouteImport
+      parentRoute: typeof ApiAcpCheckout_sessionsIdRoute
+    }
   }
 }
+
+interface ApiAcpCheckout_sessionsIdRouteChildren {
+  ApiAcpCheckout_sessionsIdCancelRoute: typeof ApiAcpCheckout_sessionsIdCancelRoute
+  ApiAcpCheckout_sessionsIdCompleteRoute: typeof ApiAcpCheckout_sessionsIdCompleteRoute
+}
+
+const ApiAcpCheckout_sessionsIdRouteChildren: ApiAcpCheckout_sessionsIdRouteChildren =
+  {
+    ApiAcpCheckout_sessionsIdCancelRoute: ApiAcpCheckout_sessionsIdCancelRoute,
+    ApiAcpCheckout_sessionsIdCompleteRoute:
+      ApiAcpCheckout_sessionsIdCompleteRoute,
+  }
+
+const ApiAcpCheckout_sessionsIdRouteWithChildren =
+  ApiAcpCheckout_sessionsIdRoute._addFileChildren(
+    ApiAcpCheckout_sessionsIdRouteChildren,
+  )
+
+interface ApiAcpCheckout_sessionsRouteChildren {
+  ApiAcpCheckout_sessionsIdRoute: typeof ApiAcpCheckout_sessionsIdRouteWithChildren
+}
+
+const ApiAcpCheckout_sessionsRouteChildren: ApiAcpCheckout_sessionsRouteChildren =
+  {
+    ApiAcpCheckout_sessionsIdRoute: ApiAcpCheckout_sessionsIdRouteWithChildren,
+  }
+
+const ApiAcpCheckout_sessionsRouteWithChildren =
+  ApiAcpCheckout_sessionsRoute._addFileChildren(
+    ApiAcpCheckout_sessionsRouteChildren,
+  )
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AgentApproveRoute: AgentApproveRoute,
   ArticleSlugRoute: ArticleSlugRoute,
+  ApiAcpCheckout_sessionsRoute: ApiAcpCheckout_sessionsRouteWithChildren,
   ApiArticleSlugRoute: ApiArticleSlugRoute,
 }
 export const routeTree = rootRouteImport

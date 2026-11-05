@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "mocksearch": {
+      "command": "node",
+      "args": ["--import", "tsx", "search-mcp/src/index.ts"]
+    },
+    "x402http": {
+      "command": "node",
+      "args": ["--import", "tsx", "x402-http-mcp/src/index.ts"]
+    }
+  }
+}

@@ -4,7 +4,7 @@ import type { HTTPRequestContext, RouteConfig } from '@x402/core/http'
 import { isAddress } from 'viem'
 import { articles } from '../data/articles'
 
-import { ARTICLE_PRICE_UNITS, BASE_SEPOLIA_NETWORK, BASE_SEPOLIA_USDC } from './payment-config'
+import { BASE_SEPOLIA_NETWORK, BASE_SEPOLIA_USDC } from './payment-config'
 
 // 支払い先アドレスを決定する
 function resolvePayTo(context: HTTPRequestContext) {
@@ -27,7 +27,7 @@ function resolvePayTo(context: HTTPRequestContext) {
 // 課金対象の記事へのアクセスをx402でラップする
 function createPaymentServer() {
   const routes: Record<string, RouteConfig> = Object.fromEntries(
-    articles.map(({ slug, title }) => [
+    articles.map(({ slug, title, priceUnits }) => [
       `GET /api/article/${slug}`,
       {
         // 課金ルール
@@ -35,7 +35,7 @@ function createPaymentServer() {
           scheme: 'exact', // 指定額決済
           network: BASE_SEPOLIA_NETWORK,
           payTo: resolvePayTo,
-          price: { asset: BASE_SEPOLIA_USDC, amount: ARTICLE_PRICE_UNITS },
+          price: { asset: BASE_SEPOLIA_USDC, amount: priceUnits },
           extra: { name: 'USDC', version: '2' },
         },
         description: `有料記事: ${title}`,
@@ -68,15 +68,28 @@ export async function getPaymentServer() {
   return paymentServer
 }
 
-export function createRequestContext(request: Request, slug: string): HTTPRequestContext {
-  const url = new URL(request.url)
+type PaymentContextInput = {
+  slug: string
+  url: string
+  payTo?: string
+  paymentHeader?: string
+  headers?: Headers
+  method?: string
+}
+
+// x402サーバーに渡すリクエスト文脈を作る。ACP checkoutからも同じ課金ルールを再利用する。
+export function createPaymentContext(input: PaymentContextInput): HTTPRequestContext {
+  const url = new URL(input.url)
+  if (input.payTo) url.searchParams.set('payTo', input.payTo)
+  const headers = input.headers ?? new Headers()
+  const method = input.method ?? 'GET'
   const adapter = {
-    getHeader: (name: string) => request.headers.get(name) ?? undefined,
-    getMethod: () => request.method,
+    getHeader: (name: string) => headers.get(name) ?? undefined,
+    getMethod: () => method,
     getPath: () => url.pathname,
     getUrl: () => url.toString(),
-    getAcceptHeader: () => request.headers.get('accept') ?? '',
-    getUserAgent: () => request.headers.get('user-agent') ?? '',
+    getAcceptHeader: () => headers.get('accept') ?? '',
+    getUserAgent: () => headers.get('user-agent') ?? '',
     getQueryParams: () => Object.fromEntries(url.searchParams.entries()),
     getQueryParam: (name: string) => url.searchParams.getAll(name).length > 1
       ? url.searchParams.getAll(name)
@@ -85,8 +98,33 @@ export function createRequestContext(request: Request, slug: string): HTTPReques
 
   return {
     adapter,
-    path: `/api/article/${slug}`,
-    method: request.method,
-    paymentHeader: request.headers.get('payment-signature') ?? request.headers.get('x-payment') ?? undefined,
+    path: `/api/article/${input.slug}`,
+    method,
+    paymentHeader: input.paymentHeader
+      ?? headers.get('payment-signature')
+      ?? headers.get('x-payment')
+      ?? undefined,
   }
+}
+
+export function createRequestContext(request: Request, slug: string): HTTPRequestContext {
+  return createPaymentContext({ slug, url: request.url, headers: request.headers, method: request.method })
+}
+
+// 未払い時の402応答から PAYMENT-REQUIRED ヘッダー(base64)を取り出す。
+export async function getPaymentRequiredHeader(slug: string, url: string, payTo?: string) {
+  const paymentServer = await getPaymentServer()
+  const result = await paymentServer.processHTTPRequest(createPaymentContext({ slug, url, payTo }))
+  if (result.type !== 'payment-error') throw new Error('支払い要件を生成できませんでした')
+  const entry = Object.entries(result.response.headers).find(([name]) => name.toLowerCase() === 'payment-required')
+  if (!entry) throw new Error('PAYMENT-REQUIREDヘッダーがありません')
+  return String(entry[1])
+}
+
+// 支払いの設定済み受取先を返す。自己送金モードでは未設定(undefined)。
+export function getConfiguredPayTo() {
+  const configured = process.env.X402_PAY_TO?.trim()
+  if (!configured) return undefined
+  if (!isAddress(configured)) throw new Error('X402_PAY_TO must be a valid EVM address')
+  return configured
 }

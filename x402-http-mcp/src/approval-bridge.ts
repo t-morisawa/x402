@@ -11,6 +11,16 @@ type ApprovalResult =
   | { status: 'approved'; quoteId: string; paymentHeader: string }
   | { status: 'rejected'; quoteId: string }
 
+type MandateResult =
+  | { status: 'approved'; quoteId: string; signature: string }
+  | { status: 'rejected'; quoteId: string }
+
+type CallbackResult =
+  | { status: 'approved'; quoteId: string; value: string }
+  | { status: 'rejected'; quoteId: string }
+
+type CallbackOptions = { approvalPageUrl: string; uiOrigin: string; quoteId: string }
+
 /**
  * 承認画面のURLを既定のブラウザーで開く。
  * ブラウザープロセスはMCP処理から切り離し、起動した時点で呼び出し元へ戻る。
@@ -39,17 +49,25 @@ async function launchBrowser(url: string) {
  * 承認時は署名済みPAYMENT-SIGNATUREヘッダーを返し、拒否・タイムアウト時はその状態を返す。
  * ここでは支払いを送信せず、署名payloadを呼び出し元へ渡すだけ。
  */
-export async function requestWalletApproval(options: {
-  approvalPageUrl: string
-  uiOrigin: string
-  quoteId: string
-}): Promise<ApprovalResult> {
+export async function requestWalletApproval(options: CallbackOptions): Promise<ApprovalResult> {
+  const result = await requestCallback(options, 'paymentHeader')
+  return result.status === 'approved' ? { status: 'approved', quoteId: result.quoteId, paymentHeader: result.value } : result
+}
+
+/** 許可証(Open mandate)のEIP-712署名を、同じローカルcallback方式で受け取る。 */
+export async function requestMandateSignature(options: CallbackOptions): Promise<MandateResult> {
+  const result = await requestCallback(options, 'signature')
+  return result.status === 'approved' ? { status: 'approved', quoteId: result.quoteId, signature: result.value } : result
+}
+
+/** 承認画面からのcallbackを待つ共通処理。approved時の値はfieldで指定した項目から取り出す。 */
+async function requestCallback(options: CallbackOptions, field: 'paymentHeader' | 'signature'): Promise<CallbackResult> {
   const nonce = randomBytes(24).toString('hex')
   let settled = false
-  let resolveResult: (result: ApprovalResult) => void
+  let resolveResult: (result: CallbackResult) => void
   let rejectResult: (error: Error) => void
 
-  const resultPromise = new Promise<ApprovalResult>((resolve, reject) => {
+  const resultPromise = new Promise<CallbackResult>((resolve, reject) => {
     resolveResult = resolve
     rejectResult = reject
   })
@@ -103,7 +121,8 @@ export async function requestWalletApproval(options: {
           return
         }
 
-        if (body.status !== 'approved' || typeof body.paymentHeader !== 'string' || body.paymentHeader.length > MAX_BODY_BYTES) {
+        const value = body[field]
+        if (body.status !== 'approved' || typeof value !== 'string' || value.length > MAX_BODY_BYTES) {
           throw new Error('Invalid approval response')
         }
 
@@ -113,7 +132,7 @@ export async function requestWalletApproval(options: {
         resolveResult({
           status: 'approved',
           quoteId: options.quoteId,
-          paymentHeader: body.paymentHeader,
+          value,
         })
       } catch {
         response.writeHead(400).end('Invalid approval response')

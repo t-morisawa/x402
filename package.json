@@ -6,7 +6,7 @@
     "dev": "vite --host 0.0.0.0",
     "mcp:x402-http": "tsx x402-http-mcp/src/index.ts",
     "mcp:search": "tsx search-mcp/src/index.ts",
-    "test": "node --import tsx --test src/lib/acp.test.ts",
+    "test": "node --import tsx --test src/lib/acp.test.ts x402-http-mcp/src/mandate.test.ts",
     "typecheck:mcp": "tsc --noEmit -p x402-http-mcp/tsconfig.json && tsc --noEmit -p search-mcp/tsconfig.json",
     "build": "vite build && tsc --noEmit",
     "preview": "vite preview"

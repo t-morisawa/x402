@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AgentApproveRouteImport } from './routes/agent/approve'
+import { Route as AgentMandateRouteImport } from './routes/agent/mandate'
 import { Route as ArticleSlugRouteImport } from './routes/article/$slug'
 import { Route as ApiAcpCheckout_sessionsRouteImport } from './routes/api/acp/checkout_sessions'
 import { Route as ApiArticleSlugRouteImport } from './routes/api/article/$slug'
@@ -26,6 +27,11 @@ const IndexRoute = IndexRouteImport.update({
 const AgentApproveRoute = AgentApproveRouteImport.update({
   id: '/agent/approve',
   path: '/agent/approve',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AgentMandateRoute = AgentMandateRouteImport.update({
+  id: '/agent/mandate',
+  path: '/agent/mandate',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ArticleSlugRoute = ArticleSlugRouteImport.update({
@@ -65,6 +71,7 @@ const ApiAcpCheckout_sessionsIdCompleteRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/agent/approve': typeof AgentApproveRoute
+  '/agent/mandate': typeof AgentMandateRoute
   '/article/$slug': typeof ArticleSlugRoute
   '/api/acp/checkout_sessions': typeof ApiAcpCheckout_sessionsRouteWithChildren
   '/api/article/$slug': typeof ApiArticleSlugRoute
@@ -75,6 +82,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/agent/approve': typeof AgentApproveRoute
+  '/agent/mandate': typeof AgentMandateRoute
   '/article/$slug': typeof ArticleSlugRoute
   '/api/acp/checkout_sessions': typeof ApiAcpCheckout_sessionsRouteWithChildren
   '/api/article/$slug': typeof ApiArticleSlugRoute
@@ -86,6 +94,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/agent/approve': typeof AgentApproveRoute
+  '/agent/mandate': typeof AgentMandateRoute
   '/article/$slug': typeof ArticleSlugRoute
   '/api/acp/checkout_sessions': typeof ApiAcpCheckout_sessionsRouteWithChildren
   '/api/article/$slug': typeof ApiArticleSlugRoute
@@ -98,6 +107,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/agent/approve'
+    | '/agent/mandate'
     | '/article/$slug'
     | '/api/acp/checkout_sessions'
     | '/api/article/$slug'
@@ -108,6 +118,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/agent/approve'
+    | '/agent/mandate'
     | '/article/$slug'
     | '/api/acp/checkout_sessions'
     | '/api/article/$slug'
@@ -118,6 +129,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/agent/approve'
+    | '/agent/mandate'
     | '/article/$slug'
     | '/api/acp/checkout_sessions'
     | '/api/article/$slug'
@@ -129,6 +141,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AgentApproveRoute: typeof AgentApproveRoute
+  AgentMandateRoute: typeof AgentMandateRoute
   ArticleSlugRoute: typeof ArticleSlugRoute
   ApiAcpCheckout_sessionsRoute: typeof ApiAcpCheckout_sessionsRouteWithChildren
   ApiArticleSlugRoute: typeof ApiArticleSlugRoute
@@ -148,6 +161,13 @@ declare module '@tanstack/react-router' {
       path: '/agent/approve'
       fullPath: '/agent/approve'
       preLoaderRoute: typeof AgentApproveRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/agent/mandate': {
+      id: '/agent/mandate'
+      path: '/agent/mandate'
+      fullPath: '/agent/mandate'
+      preLoaderRoute: typeof AgentMandateRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/article/$slug': {
@@ -229,6 +249,7 @@ const ApiAcpCheckout_sessionsRouteWithChildren =
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AgentApproveRoute: AgentApproveRoute,
+  AgentMandateRoute: AgentMandateRoute,
   ArticleSlugRoute: ArticleSlugRoute,
   ApiAcpCheckout_sessionsRoute: ApiAcpCheckout_sessionsRouteWithChildren,
   ApiArticleSlugRoute: ApiArticleSlugRoute,

@@ -16,6 +16,8 @@
   },
   "permission": {
     "x402http_fetch_url": "ask",
-    "x402http_acp_complete_checkout": "ask"
+    "x402http_acp_complete_checkout": "ask",
+    "x402http_mandate_create": "ask",
+    "x402http_acp_complete_checkout_with_mandate": "allow"
   }
 }

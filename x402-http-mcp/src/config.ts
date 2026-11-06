@@ -6,6 +6,8 @@ export const QUOTE_TTL_MS = 2 * 60 * 1000
 export const REQUEST_TIMEOUT_MS = 15_000
 export const MAX_RESPONSE_BYTES = 1_000_000
 export const MAX_PRICE_UNITS = 100_000n // 0.10 USDC (6 decimals)
+export const MAX_MANDATE_BUDGET_UNITS = 1_000_000n // 許可証の総予算の上限 1 USDC
+export const MAX_MANDATE_TTL_MS = 24 * 60 * 60 * 1000
 export const USDC_DECIMALS = 6
 export const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/
 

@@ -21,12 +21,35 @@ import {
   parseResourceBody,
   requestResource,
 } from './resource-http.ts'
-import { isPaymentPayload, requestWalletApproval } from './approval-bridge.ts'
+import { isPaymentPayload, requestMandateSignature, requestWalletApproval } from './approval-bridge.ts'
 import { acpRequest, getSessionPaymentRequired, summarizeSession, X402_HANDLER_NAME, type AcpSession } from './acp-client.ts'
+import { getAgentAccount, signPayment } from './agent-signer.ts'
+import {
+  checkAutoPay,
+  createTerms,
+  getActiveMandate,
+  registerMandate,
+  release,
+  reserve,
+  revokeMandate,
+  summarizeMandate,
+} from './mandate.ts'
+import { encodeMandateTerms } from '../../src/lib/mandate.ts'
 
 const quotes = new Map<string, Quote>()
 // ACP checkoutのquoteIdと、対応するsessionIdの対応表
 const quoteSessions = new Map<string, string>()
+
+const sessionPath = (sessionId: string) => `/api/acp/checkout_sessions/${encodeURIComponent(sessionId)}`
+
+/** ACPセッションを取り直し、x402の支払い条件とhandler IDを取り出す。ready_for_paymentでなければ例外。 */
+async function acpChallenge(sessionId: string) {
+  const session = await acpRequest('GET', sessionPath(sessionId))
+  const required = getSessionPaymentRequired(session)
+  if (!required) throw new Error(`Checkout session is not ready for payment (status: ${session.status})`)
+  const handler = session.capabilities.payment.handlers.find((item) => item.name === X402_HANDLER_NAME)!
+  return { handlerId: handler.id, challenge: { required, requirement: selectAllowedRequirement(required) } }
+}
 
 /** MCP toolへJSON形式の結果、またはエラーを返す。 */
 function toolResult(value: unknown, isError = false) {
@@ -162,7 +185,6 @@ function createServer() {
 
 
   // ---- ACP (Agentic Commerce Protocol) checkout tools ----
-  const sessionPath = (sessionId: string) => `/api/acp/checkout_sessions/${encodeURIComponent(sessionId)}`
   const productId = z.string().regex(/^[a-z0-9-]{1,100}$/)
   const walletAddress = z.string().regex(/^0x[a-fA-F0-9]{40}$/)
 
@@ -272,14 +294,7 @@ function createServer() {
         validateConfirmedTerms({ quote, confirmedAmount, confirmedNetwork, confirmedAsset, confirmedPayTo })
 
         // 2. セッションを取り直し、支払い条件がquoteから変わっていなければ署名画面へ進む。
-        const challengeOf = async () => {
-          const session = await acpRequest('GET', sessionPath(sessionId))
-          const required = getSessionPaymentRequired(session)
-          if (!required) throw new Error(`Checkout session is not ready for payment (status: ${session.status})`)
-          const handler = session.capabilities.payment.handlers.find((item) => item.name === X402_HANDLER_NAME)!
-          return { handlerId: handler.id, challenge: { required, requirement: selectAllowedRequirement(required) } }
-        }
-        const before = await challengeOf()
+        const before = await acpChallenge(sessionId)
         if (!challengeMatchesQuote(before.challenge, quote)) {
           throw new Error('The checkout details or payment terms changed since the quote. No signature was requested; get the session again.')
         }
@@ -296,7 +311,7 @@ function createServer() {
 
         // 4. 署名を検証し、直前にもう一度条件を確認してから complete を呼ぶ。
         decodeAndValidatePayload(approval.paymentHeader, quote)
-        const latest = await challengeOf()
+        const latest = await acpChallenge(sessionId)
         if (!challengeMatchesQuote(latest.challenge, quote)) {
           throw new Error('The checkout details or payment terms changed after signing. The signed payload was not sent.')
         }
@@ -336,6 +351,166 @@ function createServer() {
           quoteSessions.delete(quoteId)
         }
         return toolResult({ error: error instanceof Error ? error.message : 'ACP checkout failed' }, true)
+      }
+    },
+  )
+
+  // ---- 許可証(AP2風 Open mandate)による自動決済 ----
+  const usdcAmount = z.string().regex(/^\d+(\.\d{1,6})?$/)
+
+  server.registerTool(
+    'mandate_create',
+    {
+      title: 'Create a spending mandate',
+      description: 'Open a wallet page where the user signs a spending mandate once: allowed payees, per-purchase limit, total budget and expiry. Required before acp_complete_checkout_with_mandate. The agent wallet (X402_AGENT_PRIVATE_KEY) must hold the Base Sepolia USDC to be spent.',
+      inputSchema: {
+        payees: z.array(walletAddress).min(1).max(10),
+        maxPerPurchase: usdcAmount,
+        budget: usdcAmount,
+        ttlMinutes: z.number().int().min(1).max(1440).default(60),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+    },
+    async ({ payees, maxPerPurchase, budget, ttlMinutes }) => {
+      try {
+        if (getActiveMandate()) throw new Error('An active mandate already exists. Revoke it before creating a new one.')
+        const terms = createTerms({ agent: getAgentAccount().address, payees, maxPerPurchase, budget, ttlMinutes })
+        const demoUrl = getDemoUrl()
+        const pageUrl = new URL('/agent/mandate', demoUrl)
+        pageUrl.searchParams.set('mandate', encodeMandateTerms(terms))
+        const result = await requestMandateSignature({ approvalPageUrl: pageUrl.toString(), uiOrigin: demoUrl.origin, quoteId: terms.mandateId })
+        if (result.status !== 'approved') throw new Error('Mandate signature was rejected. No mandate was created.')
+        const mandate = await registerMandate(terms, result.signature)
+        return toolResult({ ...summarizeMandate(mandate), note: 'Payments within this mandate are made automatically from the agent wallet without further approval.' })
+      } catch (error) {
+        return toolResult({ error: error instanceof Error ? error.message : 'Could not create the mandate' }, true)
+      }
+    },
+  )
+
+  server.registerTool(
+    'mandate_status',
+    {
+      title: 'Show the spending mandate',
+      description: 'Show the active mandate, its remaining budget and payment receipts. Also shows the agent wallet address to fund.',
+      inputSchema: {},
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async () => {
+      let agent: string | undefined
+      try {
+        agent = getAgentAccount().address
+      } catch {
+        // 鍵が未設定でも状態は返す。
+      }
+      const mandate = getActiveMandate()
+      return toolResult({ agentWallet: agent ?? 'not configured', mandate: mandate ? summarizeMandate(mandate) : null })
+    },
+  )
+
+  server.registerTool(
+    'mandate_revoke',
+    {
+      title: 'Revoke the spending mandate',
+      description: 'Revoke the active mandate so that no further automatic payments are made.',
+      inputSchema: {},
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async () => {
+      revokeMandate()
+      return toolResult({ revoked: true })
+    },
+  )
+
+  // 許可証の範囲内なら、人の承認なしでエージェントの鍵で署名して complete を呼ぶ。
+  server.registerTool(
+    'acp_complete_checkout_with_mandate',
+    {
+      title: 'Pay for an ACP checkout session within the mandate',
+      description: 'Complete an ACP checkout session by signing with the agent wallet, without a per-purchase approval. Works only when the session terms are inside the active mandate (payee, per-purchase limit, remaining budget, expiry); otherwise use acp_complete_checkout.',
+      inputSchema: { sessionId: z.string().max(100), quoteId: z.string().uuid() },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+    },
+    async ({ sessionId, quoteId }) => {
+      try {
+        // 1. quoteがこのsessionのものか、許可証の範囲内かを検査する。
+        const quote = quotes.get(quoteId)
+        if (!quote || quoteSessions.get(quoteId) !== sessionId || quote.expiresAt <= Date.now()) {
+          throw new Error('Quote not found or expired. Get the checkout session again before purchasing.')
+        }
+        const mandate = getActiveMandate()
+        if (!mandate) throw new Error('No active mandate. Create one with mandate_create, or pay with acp_complete_checkout.')
+        checkAutoPay(mandate, quote.requirement)
+
+        // 2. セッションの支払い条件がquoteから変わっていないことを確認する。
+        const before = await acpChallenge(sessionId)
+        if (!challengeMatchesQuote(before.challenge, quote)) {
+          throw new Error('The checkout details or payment terms changed since the quote. Get the session again.')
+        }
+        quotes.delete(quoteId)
+        quoteSessions.delete(quoteId)
+
+        // 3. 予算を確保して署名し、直前にもう一度条件を確認してから complete を呼ぶ。
+        const amount = BigInt(quote.requirement.amount)
+        reserve(mandate, amount)
+        let sent = false
+        let completed: AcpSession
+        try {
+          const paymentHeader = await signPayment(before.challenge.required, quote.requirement)
+          decodeAndValidatePayload(paymentHeader, quote)
+          const latest = await acpChallenge(sessionId)
+          if (!challengeMatchesQuote(latest.challenge, quote)) {
+            throw new Error('The checkout details or payment terms changed after signing. The signed payload was not sent.')
+          }
+          sent = true
+          completed = await acpRequest('POST', `${sessionPath(sessionId)}/complete`, {
+            payment_data: {
+              handler_id: latest.handlerId,
+              instrument: { type: 'x402', credential: { type: 'x402_payment_signature', token: paymentHeader } },
+            },
+          })
+        } catch (error) {
+          // 送信前に失敗した場合だけ予算を戻す。送信後の例外は決済済みかもしれないので確保したままにする。
+          if (!sent) release(mandate, amount)
+          throw error
+        }
+
+        // 4. completed とsettlement receiptを確認し、証跡を残す。
+        const receipt = completed.order?.x402
+        if (
+          completed.status !== 'completed' ||
+          !receipt?.transaction ||
+          receipt.network !== quote.requirement.network ||
+          receipt.amount !== quote.requirement.amount
+        ) {
+          release(mandate, amount)
+          const reason = completed.messages.map((message) => message.content).join(' / ')
+          throw new Error(`Checkout was not completed (status: ${completed.status}). ${reason}`.trim())
+        }
+        mandate.receipts.push({
+          at: new Date().toISOString(),
+          sessionId,
+          orderId: completed.order?.id,
+          transaction: receipt.transaction,
+          amount: receipt.amount,
+          payTo: quote.requirement.payTo,
+          payer: receipt.payer,
+        })
+        return toolResult({
+          ...summarizeSession(completed),
+          orderId: completed.order?.id,
+          content: completed.order?.content,
+          payment: {
+            amount: `${formatUsdc(quote.requirement.amount)} USDC`,
+            network: receipt.network,
+            payer: receipt.payer,
+            transaction: receipt.transaction,
+            explorerUrl: `https://sepolia.basescan.org/tx/${receipt.transaction}`,
+          },
+          mandate: { mandateId: mandate.terms.mandateId, remainingUnits: (BigInt(mandate.terms.budget) - mandate.spent).toString() },
+        })
+      } catch (error) {
+        return toolResult({ error: error instanceof Error ? error.message : 'Mandate payment failed' }, true)
       }
     },
   )

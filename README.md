@@ -72,3 +72,14 @@ npm run dev
 エージェント用には`x402http` MCPに`acp_create_checkout` / `acp_update_checkout` / `acp_get_checkout` / `acp_cancel_checkout` / `acp_complete_checkout`があります。OpenCode (`opencode.json`) とClaude Code (`.mcp.json`) のどちらでも同じstdio MCPを使えます。`acp_complete_checkout`だけが署名画面を開き、決済は毎回ウォレット署名が必要です。検索結果の`productId`をそのまま`acp_create_checkout`に渡します。
 
 `npm test`でcheckout APIのテスト (facilitatorはスタブ) を実行できます。
+
+## 許可証による自動決済 (AP2風・独自実装)
+
+AP2の Open mandate の考え方を借りた独自の認可層です。AP2の仕様には準拠していません (SD-JWT/VCは使いません)。人が範囲を一度だけ署名し、範囲内の購入はエージェントが毎回の承認なしで支払います。
+
+1. `.env`に`X402_AGENT_PRIVATE_KEY` (0x + 64桁hex) を設定します。少額のBase Sepolia USDCだけを入れた専用ウォレットの鍵にしてください。
+2. `mandate_create`で署名画面 (`/agent/mandate`) を開き、ウォレットで許可証にEIP-712署名します。内容は支払い先、1回あたりの上限、総予算、有効期限です。上限は1回0.10 USDC、総予算1 USDC、期限24時間までです。
+3. `acp_complete_checkout_with_mandate`が、支払い条件を許可証と照合し、範囲内ならエージェントの鍵で署名して`complete`を呼びます。範囲外は拒否するので、`acp_complete_checkout` (毎回承認) を使います。
+4. `mandate_status`で残り予算とレシート (許可証・tx) を確認し、`mandate_revoke`で取り消せます。
+
+許可証はMCPプロセスのメモリにだけ保持し、同時に有効なのは1つです。再起動すると消えます。署名者の復元はEOAのみ対応です。
